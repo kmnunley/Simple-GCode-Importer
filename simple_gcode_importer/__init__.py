@@ -171,8 +171,6 @@ class ImportGCodeOperator(Operator, ImportHelper):
 
         filename, extension = os.path.splitext(self.filepath)
 
-        bpy.ops.collection.create(name=filename)
-
         import_gcode(self.filepath)
         return {'FINISHED'}
 
