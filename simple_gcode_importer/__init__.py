@@ -4,6 +4,7 @@ import os
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ImportHelper
 from bpy.types import Operator
+from bpy.app import debug
 
 bl_info = {
     "name": "GCode Importer",
@@ -20,9 +21,7 @@ bl_info = {
 def create_paths(gcode_lines):
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
-
-    # Create an empty collection to store the paths
-    collection = bpy.data.collections.new("Paths")
+    print("Creating paths...")
 
     absolute_coord = True
     absolute_extrude = False
@@ -51,7 +50,7 @@ def create_paths(gcode_lines):
         return tuple(coord)
 
     # Iterate through the gcode instructions
-    for line in gcode_lines:
+    for i, line in enumerate(gcode_lines):
         # Skip comments
         if line[0] == ";":
             continue
@@ -69,18 +68,29 @@ def create_paths(gcode_lines):
         if command == "G1" or command == "G0":
             coord = get_params(params)
 
-            if absolute_coord:
-                toolhead_pos = (
+            new_pos = (
                     toolhead_pos[0] if coord[0] is None else coord[0],
                     toolhead_pos[1] if coord[1] is None else coord[1],
                     toolhead_pos[2] if coord[2] is None else coord[2]
                 )
+            
+            if absolute_coord:
+                toolhead_pos = new_pos
             else:
-                toolhead_pos = toolhead_pos + (
-                    0 if coord[0] is None else coord[0],
-                    0 if coord[1] is None else coord[1],
-                    0 if coord[2] is None else coord[2]
-                )
+                toolhead_pos = tuple(map(sum, zip(toolhead_pos, new_pos)))
+
+            # if absolute_coord:
+            #     toolhead_pos = (
+            #         toolhead_pos[0] if coord[0] is None else coord[0],
+            #         toolhead_pos[1] if coord[1] is None else coord[1],
+            #         toolhead_pos[2] if coord[2] is None else coord[2]
+            #     )
+            # else:
+            #     toolhead_pos = toolhead_pos + (
+            #         0 if coord[0] is None else coord[0],
+            #         0 if coord[1] is None else coord[1],
+            #         0 if coord[2] is None else coord[2]
+            #     )
 
             if coord[3] is not None:
                 if absolute_extrude:
@@ -102,6 +112,7 @@ def create_paths(gcode_lines):
                     curve_data = bpy.data.curves.new("Path", type='CURVE')
                     curve_data.dimensions = '3D'
                     curve_data.resolution_u = 1
+                    curve_data.use_fill_caps = True
 
                     # Create a curve spline and add the toolhead position as a control point
                     curve_spline = curve_data.splines.new('BEZIER')
@@ -111,6 +122,8 @@ def create_paths(gcode_lines):
                         else:
                             curve_spline.bezier_points.add(1)
                             curve_spline.bezier_points[-1].co = point
+                        curve_spline.bezier_points[-1].handle_left = point
+                        curve_spline.bezier_points[-1].handle_right = point
 
                     # Create a new object to hold the curve data
                     curve_object = bpy.data.objects.new("Path", curve_data)
@@ -118,7 +131,6 @@ def create_paths(gcode_lines):
 
                     # Link the object to the scene and the collection
                     bpy.context.collection.objects.link(curve_object)
-                    collection.objects.link(curve_object)
                 
                 # Reset the point data
                 point_data = []
@@ -126,17 +138,16 @@ def create_paths(gcode_lines):
         # Handle mode commands
         elif command == "M82":
             absolute_extrude = True
+            print("Absolute Extruede enabled on line ", i + 1)
 
         elif command == "M83":
             absolute_extrude = False
 
         elif command == "G90":
             absolute_coord = True
-            absolute_extrude = True
 
         elif command == "G91":
             absolute_coord = False
-            absolute_extrude = False
 
         elif command == "G92":
             coord = get_params(params)
@@ -173,6 +184,8 @@ class ImportGCodeOperator(Operator, ImportHelper):
     def execute(self, context):
 
         filename, extension = os.path.splitext(self.filepath)
+
+        bpy.ops.collection.create(name=filename)
 
         import_gcode(self.filepath)
         return {'FINISHED'}
