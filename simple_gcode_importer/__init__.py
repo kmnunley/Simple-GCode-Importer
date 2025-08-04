@@ -98,7 +98,6 @@ def create_paths(gcode_lines):
                     # Create a new curve object
                     curve_data = bpy.data.curves.new("Path", type='CURVE')
                     curve_data.dimensions = '3D'
-                    curve_data.resolution_u = 1
                     curve_data.use_fill_caps = True
 
                     # Create a curve spline and add the toolhead position as a control point
