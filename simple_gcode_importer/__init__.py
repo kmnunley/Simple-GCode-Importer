@@ -79,19 +79,6 @@ def create_paths(gcode_lines):
             else:
                 toolhead_pos = tuple(map(sum, zip(toolhead_pos, new_pos)))
 
-            # if absolute_coord:
-            #     toolhead_pos = (
-            #         toolhead_pos[0] if coord[0] is None else coord[0],
-            #         toolhead_pos[1] if coord[1] is None else coord[1],
-            #         toolhead_pos[2] if coord[2] is None else coord[2]
-            #     )
-            # else:
-            #     toolhead_pos = toolhead_pos + (
-            #         0 if coord[0] is None else coord[0],
-            #         0 if coord[1] is None else coord[1],
-            #         0 if coord[2] is None else coord[2]
-            #     )
-
             if coord[3] is not None:
                 if absolute_extrude:
                     e = coord[3]
@@ -138,7 +125,6 @@ def create_paths(gcode_lines):
         # Handle mode commands
         elif command == "M82":
             absolute_extrude = True
-            print("Absolute Extruede enabled on line ", i + 1)
 
         elif command == "M83":
             absolute_extrude = False
