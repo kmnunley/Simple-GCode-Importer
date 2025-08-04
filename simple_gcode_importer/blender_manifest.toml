@@ -18,4 +18,12 @@ copyright = ["2023-2025 Kevin Nunley"]
 website = "https://github.com/kmnunley/Blender-GCode-Importer"
 
 [build]
-paths_exclude_pattern = ["/*.gcode", "__pycache__/", "/.git/", "/*.zip", "images/",]
+paths_exclude_pattern = [
+  "/*.gcode",
+  "__pycache__/",
+  "/.git/",
+  "/*.zip",
+  "images/",
+  ".venv/",
+  ".vscode/"
+  ]
