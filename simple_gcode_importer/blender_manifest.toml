@@ -25,5 +25,5 @@ paths_exclude_pattern = [
   "/*.zip",
   "images/",
   ".venv/",
-  ".vscode/"
+  ".vscode/",
   ]

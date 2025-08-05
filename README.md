@@ -1,14 +1,14 @@
-# Blender-GCode-Importer
+# Simple GCode Importer for Blender
 
 ![A 3D render of a low-poly Thinker statue](/images/low_poly_thinker.png)
 <sup>*Lowest Poly The Thinker* model by [LXO on Printables.com](https://www.printables.com/model/1165-lowest-poly-the-thinker)</sup>
 
 ## About
 
-Blender GCode Importer is a simple plug-in that translates printer GCode into Bezier curve paths in Blender. This results in a very performant representation of the object in a highly customizable format.
+Simple GCode Importer is a simple plug-in that translates printer GCode into Bezier curve paths in Blender. This results in a very performant representation of the object in a highly customizable format.
 
 ## Installation
-To install the plugin, download the repository. Then go to Preferences > Addons and click the Install button. Find the gcode_importer.py file from the repository and click install.
+To install the plugin, add it to Blender from the [Extension website](https://extensions.blender.org/add-ons/simple-gcode-importer/) or straight from Blender via Edit > Preferences > Get Extensions.
 
 ## Usage
 To import a GCode file to Blender, simply go to File > Import and select the GCode option. In the new file browser window, find and select the .gcode file you would ike to import, then click 'Import Gcode'

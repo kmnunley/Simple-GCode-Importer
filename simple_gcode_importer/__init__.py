@@ -20,6 +20,7 @@ bl_info = {
 def create_paths(gcode_lines):
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
+
     print("Creating paths...")
 
     absolute_coord = True
@@ -66,7 +67,7 @@ def create_paths(gcode_lines):
         # Handle the movement command
         if command == "G1" or command == "G0":
             coord = get_params(params)
-            
+
             if absolute_coord:
                 toolhead_pos = (
                     toolhead_pos[0] if coord[0] is None else coord[0],
@@ -74,6 +75,7 @@ def create_paths(gcode_lines):
                     toolhead_pos[2] if coord[2] is None else coord[2]
                 )
             else:
+
                 new_pos = []
                 for i in range(3):
                     offset = coord[i] if coord[i] is not None else 0
