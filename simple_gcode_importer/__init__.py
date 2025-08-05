@@ -8,7 +8,7 @@ from bpy.types import Operator
 bl_info = {
     "name": "GCode Importer",
     "author": "Kevin Nunley",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 90, 0),
     "location": "File > Import",
     "description": "Import GCode files and visualize them as 3D models",
