@@ -4,7 +4,6 @@ import os
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ImportHelper
 from bpy.types import Operator
-from bpy.app import debug
 
 bl_info = {
     "name": "GCode Importer",
@@ -67,17 +66,19 @@ def create_paths(gcode_lines):
         # Handle the movement command
         if command == "G1" or command == "G0":
             coord = get_params(params)
-
-            new_pos = (
+            
+            if absolute_coord:
+                toolhead_pos = (
                     toolhead_pos[0] if coord[0] is None else coord[0],
                     toolhead_pos[1] if coord[1] is None else coord[1],
                     toolhead_pos[2] if coord[2] is None else coord[2]
                 )
-            
-            if absolute_coord:
-                toolhead_pos = new_pos
             else:
-                toolhead_pos = tuple(map(sum, zip(toolhead_pos, new_pos)))
+                new_pos = []
+                for i in range(3):
+                    offset = coord[i] if coord[i] is not None else 0
+                    new_pos.append(toolhead_pos[i] + offset)
+                toolhead_pos = tuple(new_pos)
 
             if coord[3] is not None:
                 if absolute_extrude:
