@@ -5,7 +5,7 @@
 
 ## About
 
-Simple GCode Importer is a simple plug-in that translates printer GCode into Bezier curve paths in Blender. This results in a very performant representation of the object in a highly customizable format.
+Simple GCode Importer is a simple plug-in that translates printer GCode into Bezier curve paths in Blender. This results in a very performant representation of the object in a highly customizable format. The importer understands linear moves (G0/G1) as well as clockwise and counter-clockwise arcs (G2/G3).
 
 ## Installation
 To install the plugin, add it to Blender from the [Extension website](https://extensions.blender.org/add-ons/simple-gcode-importer/) or straight from Blender via Edit > Preferences > Get Extensions.
