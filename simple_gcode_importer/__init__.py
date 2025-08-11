@@ -1,5 +1,6 @@
 import bpy
 import os
+import math
 
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ImportHelper
@@ -34,20 +35,43 @@ def create_paths(gcode_lines):
     point_data = []
 
     def get_params(params):
-        coord = [None, None, None, None]
+        coord = {
+            "X": None,
+            "Y": None,
+            "Z": None,
+            "E": None,
+            "I": None,
+            "J": None,
+            "K": None,
+            "R": None,
+        }
         for param in params:
             try:
-                if param[0] == "X":
-                    coord[0] = float(param[1:])
-                elif param[0] == "Y":
-                    coord[1] = float(param[1:])
-                elif param[0] == "Z":
-                    coord[2] = float(param[1:])
-                elif param[0] == "E":
-                    coord[3] = float(param[1:])
+                key = param[0]
+                if key in coord:
+                    coord[key] = float(param[1:])
             except:
                 pass
-        return tuple(coord)
+        return coord
+
+    def dump_curve(points):
+        if len(points) >= 2:
+            curve_data = bpy.data.curves.new("Path", type='CURVE')
+            curve_data.dimensions = '3D'
+            curve_data.use_fill_caps = True
+
+            curve_spline = curve_data.splines.new('BEZIER')
+            for index, point in enumerate(points):
+                if index == 0:
+                    curve_spline.bezier_points[0].co = point
+                else:
+                    curve_spline.bezier_points.add(1)
+                    curve_spline.bezier_points[-1].co = point
+                curve_spline.bezier_points[-1].handle_left = point
+                curve_spline.bezier_points[-1].handle_right = point
+
+            curve_object = bpy.data.objects.new("Path", curve_data)
+            bpy.context.collection.objects.link(curve_object)
 
     # Iterate through the gcode instructions
     for i, line in enumerate(gcode_lines):
@@ -70,59 +94,103 @@ def create_paths(gcode_lines):
 
             if absolute_coord:
                 toolhead_pos = (
-                    toolhead_pos[0] if coord[0] is None else coord[0],
-                    toolhead_pos[1] if coord[1] is None else coord[1],
-                    toolhead_pos[2] if coord[2] is None else coord[2]
+                    toolhead_pos[0] if coord["X"] is None else coord["X"],
+                    toolhead_pos[1] if coord["Y"] is None else coord["Y"],
+                    toolhead_pos[2] if coord["Z"] is None else coord["Z"],
                 )
             else:
-
                 new_pos = []
                 for i in range(3):
-                    offset = coord[i] if coord[i] is not None else 0
+                    key = ["X", "Y", "Z"][i]
+                    offset = coord[key] if coord[key] is not None else 0
                     new_pos.append(toolhead_pos[i] + offset)
                 toolhead_pos = tuple(new_pos)
 
-            if coord[3] is not None:
+            if coord["E"] is not None:
                 if absolute_extrude:
-                    e = coord[3]
+                    e = coord["E"]
                 else:
-                    e = e + coord[3]
-
+                    e = e + coord["E"]
 
             if e >= max_e:
-                # Update the toolhead position and add the point to the curve data
                 point_data.append(toolhead_pos)
                 max_e = e
-            
             else:
-                # Check if there are enough points to create a curve
-                if len(point_data) >= 2:
-                    # Dump the curve data to a new curve object
-                    # Create a new curve object
-                    curve_data = bpy.data.curves.new("Path", type='CURVE')
-                    curve_data.dimensions = '3D'
-                    curve_data.use_fill_caps = True
-
-                    # Create a curve spline and add the toolhead position as a control point
-                    curve_spline = curve_data.splines.new('BEZIER')
-                    for index, point in enumerate(point_data):
-                        if index == 0:
-                            curve_spline.bezier_points[0].co = point
-                        else:
-                            curve_spline.bezier_points.add(1)
-                            curve_spline.bezier_points[-1].co = point
-                        curve_spline.bezier_points[-1].handle_left = point
-                        curve_spline.bezier_points[-1].handle_right = point
-
-                    # Create a new object to hold the curve data
-                    curve_object = bpy.data.objects.new("Path", curve_data)
-                    #curve_object.location = (0, 0, 0)
-
-                    # Link the object to the scene and the collection
-                    bpy.context.collection.objects.link(curve_object)
-                
-                # Reset the point data
+                dump_curve(point_data)
                 point_data = []
+
+        elif command == "G2" or command == "G3":
+            coord = get_params(params)
+
+            if absolute_coord:
+                end_pos = (
+                    toolhead_pos[0] if coord["X"] is None else coord["X"],
+                    toolhead_pos[1] if coord["Y"] is None else coord["Y"],
+                    toolhead_pos[2] if coord["Z"] is None else coord["Z"],
+                )
+            else:
+                end_pos = (
+                    toolhead_pos[0] + (coord["X"] if coord["X"] is not None else 0),
+                    toolhead_pos[1] + (coord["Y"] if coord["Y"] is not None else 0),
+                    toolhead_pos[2] + (coord["Z"] if coord["Z"] is not None else 0),
+                )
+
+            start_e = e
+            if coord["E"] is not None:
+                if absolute_extrude:
+                    e = coord["E"]
+                else:
+                    e = e + coord["E"]
+            end_e = e
+
+            if coord["R"] is not None:
+                r = abs(coord["R"])
+                dx = end_pos[0] - toolhead_pos[0]
+                dy = end_pos[1] - toolhead_pos[1]
+                d_sq = dx * dx + dy * dy
+                if d_sq == 0:
+                    continue
+                h_sq = r * r - d_sq / 4.0
+                if h_sq < 0:
+                    h_sq = 0
+                h = math.sqrt(h_sq)
+                sign = -1 if command == "G2" else 1
+                cx = (toolhead_pos[0] + end_pos[0]) / 2 + sign * h * dy / math.sqrt(d_sq)
+                cy = (toolhead_pos[1] + end_pos[1]) / 2 - sign * h * dx / math.sqrt(d_sq)
+            else:
+                i_off = coord["I"] if coord["I"] is not None else 0
+                j_off = coord["J"] if coord["J"] is not None else 0
+                cx = toolhead_pos[0] + i_off
+                cy = toolhead_pos[1] + j_off
+
+            radius = math.sqrt((toolhead_pos[0] - cx) ** 2 + (toolhead_pos[1] - cy) ** 2)
+            start_ang = math.atan2(toolhead_pos[1] - cy, toolhead_pos[0] - cx)
+            end_ang = math.atan2(end_pos[1] - cy, end_pos[0] - cx)
+            if command == "G2":
+                if end_ang >= start_ang:
+                    end_ang -= 2 * math.pi
+            else:
+                if end_ang <= start_ang:
+                    end_ang += 2 * math.pi
+            delta_ang = end_ang - start_ang
+            segments = max(2, int(abs(delta_ang) / (math.pi / 16)))
+
+            for s in range(1, segments + 1):
+                ang = start_ang + delta_ang * s / segments
+                x = cx + radius * math.cos(ang)
+                y = cy + radius * math.sin(ang)
+                z = toolhead_pos[2] + (end_pos[2] - toolhead_pos[2]) * s / segments
+                if coord["E"] is not None:
+                    e = start_e + (end_e - start_e) * s / segments
+                toolhead_pos = (x, y, z)
+                if e >= max_e:
+                    point_data.append(toolhead_pos)
+                    max_e = e
+                else:
+                    dump_curve(point_data)
+                    point_data = []
+
+            toolhead_pos = end_pos
 
         # Handle mode commands
         elif command == "M82":
@@ -141,13 +209,13 @@ def create_paths(gcode_lines):
             coord = get_params(params)
 
             toolhead_pos = (
-                toolhead_pos[0] if coord[0] is None else coord[0],
-                toolhead_pos[1] if coord[1] is None else coord[1],
-                toolhead_pos[2] if coord[2] is None else coord[2]
+                toolhead_pos[0] if coord["X"] is None else coord["X"],
+                toolhead_pos[1] if coord["Y"] is None else coord["Y"],
+                toolhead_pos[2] if coord["Z"] is None else coord["Z"],
             )
 
-            if coord[3] is not None:
-                e = coord[3]
+            if coord["E"] is not None:
+                e = coord["E"]
                 max_e = e
 
 
