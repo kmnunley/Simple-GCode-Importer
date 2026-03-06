@@ -1,9 +1,12 @@
 import bpy
 import os
 
-from bpy.props import StringProperty
-from bpy_extras.io_utils import ImportHelper
-from bpy.types import Operator
+from bpy.props import StringProperty, CollectionProperty
+from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
+from bpy.types import Operator, OperatorFileListElement, FileHandler
+
+from .gcode_lib import load
+
 
 bl_info = {
     "name": "GCode Importer",
@@ -152,45 +155,80 @@ def create_paths(gcode_lines):
 
 
 def import_gcode(filepath):
-    # Load the gcode file
-    gcode_file = open(filepath, "r")
-    gcode_lines = gcode_file.readlines()
+    try:
+        gf = load(filepath)
+    except Exception as e:
+        print(f"error: failed to load gcode/bgcode file '{filepath}': {e}")
+        return
 
-    # Create the geometry
+    gcode_lines = []
+    for line in gf.lines:
+        raw = line.raw
+        if raw.endswith("\n"):
+            gcode_lines.append(raw)
+        else:
+            gcode_lines.append(raw + "\n")
+
+    if not gcode_lines:
+        print("warning: no gcode lines found")
+        return
+
     create_paths(gcode_lines)
 
-# Define the operator class
+
 class ImportGCodeOperator(Operator, ImportHelper):
     bl_idname = "import_gcode.operator"
-    bl_label = "Import GCode"
+    bl_label = "Import GCode/BGCode"
 
     filter_glob: StringProperty(
-        default="*.gcode",
+        default="*.gcode;*.bgcode",
         options={'HIDDEN'},
     )
 
+    files: CollectionProperty(type=OperatorFileListElement)
+    directory: StringProperty(subtype='DIR_PATH')
+
     def execute(self, context):
+        if self.files:
+            for file_elem in self.files:
+                filepath = os.path.join(self.directory, file_elem.name)
+                import_gcode(filepath)
+        else:
+            import_gcode(self.filepath)
 
-        filename, extension = os.path.splitext(self.filepath)
-
-        import_gcode(self.filepath)
         return {'FINISHED'}
+
+
+class GCODE_FH_import(FileHandler):
+    bl_idname = "GCODE_FH_import"
+    bl_label = "GCode/BGCode File Handler"
+    bl_import_operator = "import_gcode.operator"
+    bl_file_extensions = ".gcode;.bgcode"
+
+    @classmethod
+    def poll_drop(cls, context):
+        return poll_file_object_drop(context)
+
+
+classes = (
+    ImportGCodeOperator,
+    GCODE_FH_import,
+)
 
 @bpy.app.handlers.persistent
 def register():
-    # Register the operator
-    bpy.utils.register_class(ImportGCodeOperator)
-
-    # Add the operator to the File > Import menu
+    # Register the classes (additional class for drag and drop)
+    for cls in classes:
+        bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(menu_func)
 
 @bpy.app.handlers.persistent
 def unregister():
     # Remove the operator from the File > Import menu
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
-
-    # Unregister the operator
-    bpy.utils.unregister_class(ImportGCodeOperator)
+    # Unregister the operators (in reverse order to avoid dependency issues)
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
 
 def menu_func(self, context):
     self.layout.operator(ImportGCodeOperator.bl_idname, text="GCode (.gcode)")
