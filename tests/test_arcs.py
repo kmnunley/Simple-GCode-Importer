@@ -1,6 +1,7 @@
 """Run with Blender --background --factory-startup --python-exit-code 1 --python this_file."""
 
 import importlib.util
+import sys
 import math
 import io
 from pathlib import Path
@@ -15,6 +16,7 @@ spec = importlib.util.spec_from_file_location(
     "arc_test_importer", ROOT / "simple_gcode_importer" / "__init__.py"
 )
 importer = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
 
@@ -145,7 +147,7 @@ class ArcImportTests(unittest.TestCase):
         importer.register()
         try:
             result = bpy.ops.import_gcode.operator(
-                filepath=str(ROOT / "tests" / "fixtures" / "pr14-arcs.gcode"))
+                filepath=str(ROOT / "tests" / "fixtures" / "xy_arcs.gcode"))
             self.assertEqual(result, {'FINISHED'})
             objects = list(bpy.context.collection.objects)
             self.assertEqual(len(objects), 5)
@@ -167,6 +169,31 @@ class ArcImportTests(unittest.TestCase):
             with self.subTest(arc=arc):
                 with self.assertRaisesRegex(ValueError, "Line 2:"):
                     self.paths(f"G0 X10\n{arc}\n")
+
+    def test_slicer_rounded_ij_arcs_keep_the_exact_endpoint(self):
+        # Reduced from the user's MK4 MMU3 file (lines 1495 and 2622).
+        cases = (
+            ('G0 X115.485 Y75.773 Z.35',
+             'G2 X115.491 Y76.047 I.421 J.126 E.00591',
+             (115.491, 76.047, .35)),
+            ('G0 X101.98 Y62.856 Z.35',
+             'G3 X101.623 Y62.892 I-.228 J-.489 E.00775',
+             (101.623, 62.892, .35)),
+        )
+        for start, arc, expected in cases:
+            with self.subTest(arc=arc):
+                self.setUp()
+                obj, = self.paths(start + '\n' + arc + '\n')
+                self.assert_point(self.points(obj)[-1], expected)
+
+    def test_ij_radius_rounding_tolerance_still_rejects_larger_mismatches(self):
+        for command in ('G2', 'G3'):
+            with self.subTest(command=command):
+                self.setUp()
+                obj, = self.paths(f'G0 X1\n{command} X0 Y1.0029 I-1 E1\n')
+                self.assert_point(self.points(obj)[-1], (0, 1.0029, 0))
+                with self.assertRaisesRegex(ValueError, 'different distances'):
+                    self.paths(f'G0 X1\n{command} X0 Y1.0031 I-1 E1\n')
 
     def test_failed_imports_remove_only_their_own_scene_data(self):
         # Existing data may have the same names as data made by the importer.
@@ -196,7 +223,7 @@ class ArcImportTests(unittest.TestCase):
         importer.register()
         try:
             text = "G1 X10 E1\nG0 X20\nG3 X30 Y10 R1 E1\n"
-            with patch("builtins.open", return_value=io.StringIO(text)):
+            with patch("builtins.open", return_value=io.BytesIO(text.encode("utf-8"))):
                 # Blender exposes ERROR reports from CANCELLED operators as RuntimeError.
                 with self.assertRaisesRegex(RuntimeError, "Line 3:"):
                     bpy.ops.import_gcode.operator(filepath="failed-import.gcode")
@@ -212,7 +239,8 @@ class ArcImportTests(unittest.TestCase):
                     self.paths(command + "\n")
 
 
-suite = unittest.defaultTestLoader.loadTestsFromTestCase(ArcImportTests)
-result = unittest.TextTestRunner(verbosity=2).run(suite)
-if not result.wasSuccessful():
-    raise RuntimeError("Blender arc regression checks failed")
+if __name__ == "__main__":
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(ArcImportTests)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    if not result.wasSuccessful():
+        raise RuntimeError("Blender arc regression checks failed")

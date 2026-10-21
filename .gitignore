@@ -2,5 +2,7 @@
 /*.gcode
 /*.bgcode
 simple_gcode_importer/__pycache__
+tests/__pycache__/
+.test-tmp/
 .env
 .env.blender
