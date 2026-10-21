@@ -1,6 +1,7 @@
 """Run with Blender --background --factory-startup --python-exit-code 1 --python this_file."""
 
 import importlib.util
+import sys
 import math
 import io
 from pathlib import Path
@@ -15,6 +16,7 @@ spec = importlib.util.spec_from_file_location(
     "arc_test_importer", ROOT / "simple_gcode_importer" / "__init__.py"
 )
 importer = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
 
@@ -196,7 +198,7 @@ class ArcImportTests(unittest.TestCase):
         importer.register()
         try:
             text = "G1 X10 E1\nG0 X20\nG3 X30 Y10 R1 E1\n"
-            with patch("builtins.open", return_value=io.StringIO(text)):
+            with patch("builtins.open", return_value=io.BytesIO(text.encode("utf-8"))):
                 # Blender exposes ERROR reports from CANCELLED operators as RuntimeError.
                 with self.assertRaisesRegex(RuntimeError, "Line 3:"):
                     bpy.ops.import_gcode.operator(filepath="failed-import.gcode")

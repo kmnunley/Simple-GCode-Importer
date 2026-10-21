@@ -1,18 +1,22 @@
 import bpy
 import os
 import math
+from contextlib import contextmanager
 
-from bpy.props import StringProperty
-from bpy_extras.io_utils import ImportHelper
-from bpy.types import Operator
+from bpy.props import StringProperty, CollectionProperty
+from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
+from bpy.types import Operator, OperatorFileListElement, FileHandler
+
+from .gcode_lib import load
+
 
 bl_info = {
     "name": "GCode Importer",
     "author": "Kevin Nunley",
     "version": (1, 0, 1),
-    "blender": (2, 90, 0),
+    "blender": (4, 2, 0),
     "location": "File > Import",
-    "description": "Import GCode files and visualize them as 3D models",
+    "description": "Import text or binary GCode as 3D paths",
     "warning": "",
     "doc_url": "https://github.com/kmnunley/Blender-GCode-Importer",
     "category": "Import-Export",
@@ -75,17 +79,24 @@ def arc_points(start, end, coord, clockwise):
     return points
 
 
-def create_paths(gcode_lines):
-    """Create paths atomically, rolling back this import's data on failure."""
+@contextmanager
+def import_transaction():
+    """Remove only this import's data if any file in the batch fails."""
     created_data = {name: [] for name in ("objects", "curves", "materials")}
     try:
-        _create_paths(gcode_lines, created_data)
+        yield created_data
     except Exception:
         # Remove users before their data, preserving all pre-existing scene data.
         for name, blocks in created_data.items():
             for block in reversed(blocks):
                 getattr(bpy.data, name).remove(block, do_unlink=True)
         raise
+
+
+def create_paths(gcode_lines):
+    """Create paths atomically, rolling back this import's data on failure."""
+    with import_transaction() as created_data:
+        _create_paths(gcode_lines, created_data)
 
 
 def _create_paths(gcode_lines, created_data):
@@ -248,52 +259,79 @@ def _create_paths(gcode_lines, created_data):
 
 
 def import_gcode(filepath):
-    # Load the gcode file
-    with open(filepath, "r") as gcode_file:
-        gcode_lines = gcode_file.readlines()
+    import_gcodes([filepath])
 
-    # Create the geometry
-    create_paths(gcode_lines)
 
-# Define the operator class
+def import_gcodes(filepaths):
+    with import_transaction() as created_data:
+        for filepath in filepaths:
+            try:
+                _create_paths(load(filepath), created_data)
+            except (OSError, ValueError) as error:
+                raise ValueError(f"{os.path.basename(filepath)}: {error}") from error
+
+
 class ImportGCodeOperator(Operator, ImportHelper):
     bl_idname = "import_gcode.operator"
-    bl_label = "Import GCode"
+    bl_label = "Import GCode/BGCode"
 
     filter_glob: StringProperty(
-        default="*.gcode",
+        default="*.gcode;*.bgcode",
         options={'HIDDEN'},
     )
 
+    files: CollectionProperty(type=OperatorFileListElement)
+    directory: StringProperty(subtype='DIR_PATH')
+
+    def invoke(self, context, event):
+        # A drop supplies the path already; show confirmation instead of reopening
+        # the file browser. Menu imports still open the normal file selector.
+        return self.invoke_popup(context)
+
     def execute(self, context):
-
-        filename, extension = os.path.splitext(self.filepath)
-
+        filepaths = ([os.path.join(self.directory, item.name) for item in self.files]
+                     if self.files else [self.filepath])
         try:
-            import_gcode(self.filepath)
-        except ValueError as error:
+            import_gcodes(filepaths)
+        except (OSError, ValueError) as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
         return {'FINISHED'}
 
+
+class GCODE_FH_import(FileHandler):
+    bl_idname = "GCODE_FH_import"
+    bl_label = "GCode/BGCode File Handler"
+    bl_import_operator = "import_gcode.operator"
+    bl_file_extensions = ".gcode;.bgcode"
+
+    @classmethod
+    def poll_drop(cls, context):
+        return poll_file_object_drop(context)
+
+
+classes = (
+    ImportGCodeOperator,
+    GCODE_FH_import,
+)
+
 @bpy.app.handlers.persistent
 def register():
-    # Register the operator
-    bpy.utils.register_class(ImportGCodeOperator)
-
-    # Add the operator to the File > Import menu
+    # Register the classes (additional class for drag and drop)
+    for cls in classes:
+        bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(menu_func)
 
 @bpy.app.handlers.persistent
 def unregister():
     # Remove the operator from the File > Import menu
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
-
-    # Unregister the operator
-    bpy.utils.unregister_class(ImportGCodeOperator)
+    # Unregister the operators (in reverse order to avoid dependency issues)
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
 
 def menu_func(self, context):
-    self.layout.operator(ImportGCodeOperator.bl_idname, text="GCode (.gcode)")
+    self.layout.operator(ImportGCodeOperator.bl_idname, text="GCode (.gcode, .bgcode)")
 
 if __name__ == "__main__":
     register()

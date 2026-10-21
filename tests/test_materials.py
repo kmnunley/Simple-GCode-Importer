@@ -1,6 +1,7 @@
 """Run with Blender --background --factory-startup --python-exit-code 1 --python this_file."""
 
 import importlib.util
+import sys
 from pathlib import Path
 import unittest
 
@@ -13,6 +14,7 @@ spec = importlib.util.spec_from_file_location(
     "material_test_importer", ROOT / "simple_gcode_importer" / "__init__.py"
 )
 importer = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
 
