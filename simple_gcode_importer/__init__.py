@@ -13,7 +13,7 @@ from .gcode_lib import load
 bl_info = {
     "name": "GCode Importer",
     "author": "Kevin Nunley",
-    "version": (1, 2, 0),
+    "version": (1, 2, 1),
     "blender": (4, 2, 0),
     "location": "File > Import",
     "description": "Import text or binary GCode as 3D paths",

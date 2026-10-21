@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Read text G-code and Prusa binary G-code using only the standard library.
 
 Reader subset adapted from Hyiger's gcode-lib 1.0.0, as contributed by

@@ -1,7 +1,7 @@
 # G-code reader attribution
 
 `gcode_lib.py` contains a modified reader subset of **gcode-lib 1.0.0** by
-**Hyiger**, <https://github.com/hyiger/gcode-lib>, licensed under GNU GPL v3.
+**Hyiger**, <https://github.com/hyiger/gcode-lib>, licensed under GNU GPL v3 or later.
 The license text is included in `LICENSE.gcode-lib`.
 
 The original vendored source was contributed by **amoose136** in
