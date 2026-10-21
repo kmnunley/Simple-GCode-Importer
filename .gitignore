@@ -6,3 +6,6 @@ tests/__pycache__/
 .test-tmp/
 .env
 .env.blender
+
+# Publish new build archives as release assets; preserve existing tracked ZIPs.
+/releases/*.zip
