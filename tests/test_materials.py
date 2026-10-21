@@ -52,6 +52,39 @@ class MaterialImportTests(unittest.TestCase):
         self.assertEqual(len(objects), 1)
         self.assert_points(objects[0], [(0, 0, 0), (10, 0, 0), (20, 0, 0)])
 
+    def test_travel_only_file_does_not_create_geometry(self):
+        for move in ("G0", "G1"):
+            with self.subTest(move=move):
+                objects = self.paths(f"G92 E0\n{move} X10 Y10\n{move} X100 Y100\n")
+                self.assertEqual(objects, [])
+
+    def test_parking_moves_do_not_extend_the_last_printed_path(self):
+        objects = self.paths(
+            "G0 X10 Y10\nG1 X20 Y10 E1\nG92 E0\n"
+            "G0 X100 Y100\nG0 X110 Y100\n"
+        )
+        self.assertEqual(len(objects), 1)
+        self.assert_points(objects[0], [(10, 10, 0), (20, 10, 0)])
+
+    def test_travel_gap_starts_next_path_at_the_new_position(self):
+        objects = self.paths(
+            "G0 X10\nG1 X20 E1\nG0 X100\nG1 X110 E1\n"
+        )
+        self.assertEqual(len(objects), 2)
+        self.assert_points(objects[0], [(10, 0, 0), (20, 0, 0)])
+        self.assert_points(objects[1], [(100, 0, 0), (110, 0, 0)])
+
+    def test_stationary_priming_and_unretraction_do_not_create_geometry(self):
+        objects = self.paths(
+            "G1 X10 E1\nG1 E-1\nG0 X20\nG1 E1\nG0 X30\nG0 X40\n"
+        )
+        self.assertEqual(len(objects), 1)
+        self.assert_points(objects[0], [(0, 0, 0), (10, 0, 0)])
+
+    def test_travel_only_tool_switch_does_not_create_geometry(self):
+        objects = self.paths("G0 X10\nG0 X20\nT1\nG0 X30\nG0 X40\n")
+        self.assertEqual(objects, [])
+
     def test_returning_to_a_tool_reuses_material_and_extrusion_position(self):
         objects = self.paths(
             "M82\nG1 X0 E0\nG1 X10 E10\n"

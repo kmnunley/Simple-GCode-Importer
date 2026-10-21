@@ -92,6 +92,7 @@ def create_paths(gcode_lines):
         # Handle the movement command
         if command == "G1" or command == "G0":
             coord = get_params(params)
+            start_pos = toolhead_pos
 
             if absolute_coord:
                 toolhead_pos = (
@@ -114,14 +115,15 @@ def create_paths(gcode_lines):
                     e = e + coord[3]
 
 
-            if e >= max_e:
-                # Update the toolhead position and add the point to the curve data
+            if e > max_e and toolhead_pos != start_pos:
+                # Draw only motion depositing new filament, starting at its origin.
+                if not point_data:
+                    point_data.append(start_pos)
                 point_data.append(toolhead_pos)
-                max_e = e
-            
             else:
                 dump_curve(point_data)
                 point_data = []
+            max_e = max(max_e, e)
 
         elif command.startswith("T") and command[1:].isascii() and command[1:].isdigit():
             next_tool = f"T{int(command[1:])}"
