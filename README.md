@@ -21,7 +21,7 @@ Imported paths have a bevel depth of 0.2. Paths from the same tool share a mater
 
 The importer supports linear moves (`G0`/`G1`) and clockwise/counterclockwise XY arcs (`G2`/`G3`). Arcs can use relative `I`/`J` center offsets or a signed `R` radius: positive radii select the short arc, negative radii select the long arc. Full circles use `I`/`J` with matching or omitted XY endpoints. Z changes interpolate evenly along the arc for helical moves. Only motion depositing new filament creates geometry; travel arcs still update the next move's starting position.
 
-Arc sampling uses a maximum angle of 11.25 degrees per segment. XYZ endpoints follow `G90`/`G91`, while extrusion follows `M82`/`M83`. Arc centers remain relative to the start (`G91.1`). Non-XY planes (`G18`/`G19`), absolute arc centers (`G90.1`), and `K` offsets are unsupported. Invalid arc geometry or unsupported modes stop the import with an error. Commands and parameters must be separated by spaces.
+Arc sampling uses a maximum angle of 11.25 degrees per segment. XYZ endpoints follow `G90`/`G91`, while extrusion follows `M82`/`M83`. Arc centers remain relative to the start (`G91.1`). I/J arcs allow a start/end radius difference of up to 0.003 mm or 0.01% of the larger radius, whichever is greater, to accommodate rounded slicer coordinates; the final point remains exactly the commanded endpoint. Non-XY planes (`G18`/`G19`), absolute arc centers (`G90.1`), and `K` offsets are unsupported. Invalid arc geometry or unsupported modes stop the import with an error. Commands and parameters must be separated by spaces.
 
 ## FAQ
 **How long do models take to import?**<br>

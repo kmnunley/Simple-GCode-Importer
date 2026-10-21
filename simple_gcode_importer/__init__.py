@@ -25,6 +25,9 @@ bl_info = {
 # Maximum angle between samples; a full circle has at least 32 segments.
 ARC_MAX_ANGLE = math.pi / 16
 ARC_TOLERANCE = 1e-7
+# Rounding XY endpoints and I/J offsets to 0.001 mm can make the two radii
+# differ by up to 2 * sqrt(2) * 0.001 mm. Allow that quantization error.
+ARC_RADIUS_ABS_TOLERANCE = 0.003
 
 
 def arc_points(start, end, coord, clockwise):
@@ -56,7 +59,8 @@ def arc_points(start, end, coord, clockwise):
         if radius <= ARC_TOLERANCE:
             raise ValueError("Arc center must differ from its start point")
         end_radius = math.hypot(end[0] - cx, end[1] - cy)
-        if not math.isclose(radius, end_radius, rel_tol=1e-4, abs_tol=1e-3):
+        if not math.isclose(radius, end_radius, rel_tol=1e-4,
+                            abs_tol=ARC_RADIUS_ABS_TOLERANCE):
             raise ValueError("Arc endpoints have different distances from the I/J center")
 
     angle = math.atan2(start[1] - cy, start[0] - cx)

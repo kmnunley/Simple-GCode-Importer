@@ -170,6 +170,31 @@ class ArcImportTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Line 2:"):
                     self.paths(f"G0 X10\n{arc}\n")
 
+    def test_slicer_rounded_ij_arcs_keep_the_exact_endpoint(self):
+        # Reduced from the user's MK4 MMU3 file (lines 1495 and 2622).
+        cases = (
+            ('G0 X115.485 Y75.773 Z.35',
+             'G2 X115.491 Y76.047 I.421 J.126 E.00591',
+             (115.491, 76.047, .35)),
+            ('G0 X101.98 Y62.856 Z.35',
+             'G3 X101.623 Y62.892 I-.228 J-.489 E.00775',
+             (101.623, 62.892, .35)),
+        )
+        for start, arc, expected in cases:
+            with self.subTest(arc=arc):
+                self.setUp()
+                obj, = self.paths(start + '\n' + arc + '\n')
+                self.assert_point(self.points(obj)[-1], expected)
+
+    def test_ij_radius_rounding_tolerance_still_rejects_larger_mismatches(self):
+        for command in ('G2', 'G3'):
+            with self.subTest(command=command):
+                self.setUp()
+                obj, = self.paths(f'G0 X1\n{command} X0 Y1.0029 I-1 E1\n')
+                self.assert_point(self.points(obj)[-1], (0, 1.0029, 0))
+                with self.assertRaisesRegex(ValueError, 'different distances'):
+                    self.paths(f'G0 X1\n{command} X0 Y1.0031 I-1 E1\n')
+
     def test_failed_imports_remove_only_their_own_scene_data(self):
         # Existing data may have the same names as data made by the importer.
         curve = bpy.data.curves.new("Path", type='CURVE')

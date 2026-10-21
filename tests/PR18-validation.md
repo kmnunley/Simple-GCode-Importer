@@ -44,3 +44,21 @@ Registration, allowed drop contexts, mixed file execution, and confirmation
 versus file-browser routing are covered by the background tests. Before
 release, drag one `.gcode`, one `.bgcode`, and a mixed selection into a 3D
 Viewport or the View Layer Outliner and confirm the imports.
+
+## MK4 MMU3 rounded-arc follow-up
+
+The user's `MK4_MMU3_2COLOR_TEST_0.4n_0.15mm_PLA_16m.bgcode` decodes to
+16,681 lines containing 1,729 I/J arcs. The previous 0.001 mm absolute radius
+tolerance rejected three arcs. At line 1495 the radius difference is
+0.0011499327 mm: rounded coordinates, rather than a binary decoding failure.
+
+The absolute tolerance is now 0.003 mm, covering the worst-case difference
+from rounding XY endpoints and I/J offsets to 0.001 mm (approximately
+0.002828 mm). The existing 0.01% relative tolerance remains. Sampling retains
+the exact commanded endpoint. Tests include both clockwise and counterclockwise
+arcs reduced from this file, plus rejection immediately beyond the new bound.
+
+The complete file imports in Blender 4.4.3 and 5.2.2 with 1,267 paths, 9,842 control
+points, and `T0`/`T1` materials. All 36 Blender regression tests pass in both after the
+fix (18 arc, 11 material, 7 file-import tests). The source BGCode is not modified
+or bundled with the extension.
