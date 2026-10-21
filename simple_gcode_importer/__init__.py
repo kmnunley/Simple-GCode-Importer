@@ -32,6 +32,31 @@ def create_paths(gcode_lines):
     e = 0
     max_e = 0
     point_data = []
+    current_tool = "T0"
+    materials = {}
+    extruder_positions = {}
+
+    def dump_curve(points):
+        if len(points) < 2:
+            return
+
+        curve_data = bpy.data.curves.new("Path", type='CURVE')
+        curve_data.dimensions = '3D'
+        curve_data.use_fill_caps = True
+        curve_data.bevel_depth = 0.2
+        if current_tool not in materials:
+            materials[current_tool] = bpy.data.materials.new(current_tool)
+        curve_data.materials.append(materials[current_tool])
+
+        curve_spline = curve_data.splines.new('BEZIER')
+        curve_spline.bezier_points.add(len(points) - 1)
+        for bezier_point, point in zip(curve_spline.bezier_points, points):
+            bezier_point.co = point
+            bezier_point.handle_left = point
+            bezier_point.handle_right = point
+
+        curve_object = bpy.data.objects.new("Path", curve_data)
+        bpy.context.collection.objects.link(curve_object)
 
     def get_params(params):
         coord = [None, None, None, None]
@@ -67,6 +92,7 @@ def create_paths(gcode_lines):
         # Handle the movement command
         if command == "G1" or command == "G0":
             coord = get_params(params)
+            start_pos = toolhead_pos
 
             if absolute_coord:
                 toolhead_pos = (
@@ -89,40 +115,25 @@ def create_paths(gcode_lines):
                     e = e + coord[3]
 
 
-            if e >= max_e:
-                # Update the toolhead position and add the point to the curve data
+            if e > max_e and toolhead_pos != start_pos:
+                # Draw only motion depositing new filament, starting at its origin.
+                if not point_data:
+                    point_data.append(start_pos)
                 point_data.append(toolhead_pos)
-                max_e = e
-            
             else:
-                # Check if there are enough points to create a curve
-                if len(point_data) >= 2:
-                    # Dump the curve data to a new curve object
-                    # Create a new curve object
-                    curve_data = bpy.data.curves.new("Path", type='CURVE')
-                    curve_data.dimensions = '3D'
-                    curve_data.use_fill_caps = True
-
-                    # Create a curve spline and add the toolhead position as a control point
-                    curve_spline = curve_data.splines.new('BEZIER')
-                    for index, point in enumerate(point_data):
-                        if index == 0:
-                            curve_spline.bezier_points[0].co = point
-                        else:
-                            curve_spline.bezier_points.add(1)
-                            curve_spline.bezier_points[-1].co = point
-                        curve_spline.bezier_points[-1].handle_left = point
-                        curve_spline.bezier_points[-1].handle_right = point
-
-                    # Create a new object to hold the curve data
-                    curve_object = bpy.data.objects.new("Path", curve_data)
-                    #curve_object.location = (0, 0, 0)
-
-                    # Link the object to the scene and the collection
-                    bpy.context.collection.objects.link(curve_object)
-                
-                # Reset the point data
+                dump_curve(point_data)
                 point_data = []
+            max_e = max(max_e, e)
+
+        elif command.startswith("T") and command[1:].isascii() and command[1:].isdigit():
+            next_tool = f"T{int(command[1:])}"
+            if next_tool != current_tool:
+                # Save with the old material, retaining the shared boundary point.
+                dump_curve(point_data)
+                point_data = point_data[-1:]
+                extruder_positions[current_tool] = (e, max_e)
+                current_tool = next_tool
+                e, max_e = extruder_positions.get(current_tool, (0, 0))
 
         # Handle mode commands
         elif command == "M82":
@@ -149,6 +160,8 @@ def create_paths(gcode_lines):
             if coord[3] is not None:
                 e = coord[3]
                 max_e = e
+
+    dump_curve(point_data)
 
 
 def import_gcode(filepath):

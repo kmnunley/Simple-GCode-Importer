@@ -13,6 +13,8 @@ To install the plugin, add it to Blender from the [Extension website](https://ex
 ## Usage
 To import a GCode file to Blender, simply go to File > Import and select the GCode option. In the new file browser window, find and select the .gcode file you would ike to import, then click 'Import Gcode'
 
+Imported paths have a bevel depth of 0.2. Paths from the same tool share a material, named `T0`, `T1`, and so on, so editing that material updates all paths for that tool within the import. Files without tool commands use `T0`. Materials and default bevel support are adapted from [Mitsunori YOSHIDA's contribution in PR #6](https://github.com/kmnunley/Simple-GCode-Importer/pull/6).
+
 ## FAQ
 **How long do models take to import?**<br>
 This depends heavily on the computer you are running on, but imports can take anywhere from just a couple seconds to several minutes depening on the size and complexity of the model that is being imported.
