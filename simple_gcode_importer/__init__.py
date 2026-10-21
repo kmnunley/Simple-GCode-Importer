@@ -1,5 +1,6 @@
 import bpy
 import os
+import math
 
 from bpy.props import StringProperty
 from bpy_extras.io_utils import ImportHelper
@@ -17,6 +18,63 @@ bl_info = {
     "category": "Import-Export",
 }
 
+# Maximum angle between samples; a full circle has at least 32 segments.
+ARC_MAX_ANGLE = math.pi / 16
+ARC_TOLERANCE = 1e-7
+
+
+def arc_points(start, end, coord, clockwise):
+    """Sample an XY arc, with relative I/J centers and linear Z interpolation."""
+    if "K" in coord:
+        raise ValueError("K arc offsets are unsupported; use XY arcs with I/J or R")
+    if "R" in coord:
+        if "I" in coord or "J" in coord:
+            raise ValueError("An arc must use either R or I/J, not both")
+        radius = abs(coord["R"])
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        chord = math.hypot(dx, dy)
+        if radius <= ARC_TOLERANCE or chord <= ARC_TOLERANCE:
+            raise ValueError("R arcs need a nonzero radius and distinct XY endpoints")
+        if chord > 2 * radius + ARC_TOLERANCE:
+            raise ValueError("Arc radius is smaller than half the endpoint distance")
+        height = math.sqrt(max(0, radius * radius - chord * chord / 4))
+        side = -1 if clockwise else 1
+        if coord["R"] < 0:
+            side = -side
+        cx = (start[0] + end[0]) / 2 - side * height * dy / chord
+        cy = (start[1] + end[1]) / 2 + side * height * dx / chord
+    else:
+        if "I" not in coord and "J" not in coord:
+            raise ValueError("An arc requires I/J center offsets or an R radius")
+        cx = start[0] + coord.get("I", 0)
+        cy = start[1] + coord.get("J", 0)
+        radius = math.hypot(start[0] - cx, start[1] - cy)
+        if radius <= ARC_TOLERANCE:
+            raise ValueError("Arc center must differ from its start point")
+        end_radius = math.hypot(end[0] - cx, end[1] - cy)
+        if not math.isclose(radius, end_radius, rel_tol=1e-4, abs_tol=1e-3):
+            raise ValueError("Arc endpoints have different distances from the I/J center")
+
+    angle = math.atan2(start[1] - cy, start[0] - cx)
+    end_angle = math.atan2(end[1] - cy, end[0] - cx)
+    sweep = (end_angle - angle) % math.tau
+    if clockwise:
+        sweep -= math.tau
+    elif sweep == 0:
+        sweep = math.tau
+    segments = max(2, math.ceil(abs(sweep) / ARC_MAX_ANGLE))
+    points = []
+    for step in range(1, segments + 1):
+        fraction = step / segments
+        theta = angle + sweep * fraction
+        points.append((cx + radius * math.cos(theta),
+                       cy + radius * math.sin(theta),
+                       start[2] + (end[2] - start[2]) * fraction))
+    # Keep adjacent moves joined exactly, even after trig/rounding errors.
+    points[-1] = end
+    return points
+
+
 def create_paths(gcode_lines):
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
@@ -26,9 +84,6 @@ def create_paths(gcode_lines):
     absolute_coord = True
     absolute_extrude = False
 
-    x = 0
-    y = 0
-    z = 0
     e = 0
     max_e = 0
     point_data = []
@@ -59,29 +114,36 @@ def create_paths(gcode_lines):
         bpy.context.collection.objects.link(curve_object)
 
     def get_params(params):
-        coord = [None, None, None, None]
+        coord = {}
         for param in params:
-            try:
-                if param[0] == "X":
-                    coord[0] = float(param[1:])
-                elif param[0] == "Y":
-                    coord[1] = float(param[1:])
-                elif param[0] == "Z":
-                    coord[2] = float(param[1:])
-                elif param[0] == "E":
-                    coord[3] = float(param[1:])
-            except:
-                pass
-        return tuple(coord)
+            if param[0] in "XYZEIJKR":
+                value = float(param[1:])
+                if not math.isfinite(value):
+                    raise ValueError("G-code coordinates must be finite")
+                coord[param[0]] = value
+        return coord
+
+    def record_move(start, end, start_e, end_e):
+        nonlocal point_data, max_e
+        if end_e > max_e and end != start:
+            # Unretraction restores old filament before depositing anything new.
+            if start_e < max_e:
+                fraction = (max_e - start_e) / (end_e - start_e)
+                start = tuple(a + (b - a) * fraction for a, b in zip(start, end))
+                dump_curve(point_data)
+                point_data = []
+            if not point_data:
+                point_data.append(start)
+            point_data.append(end)
+        else:
+            dump_curve(point_data)
+            point_data = []
+        max_e = max(max_e, end_e)
 
     # Iterate through the gcode instructions
-    for i, line in enumerate(gcode_lines):
-        # Skip comments
-        if line[0] == ";":
-            continue
-
+    for line_number, line in enumerate(gcode_lines, 1):
         # Split the line into words
-        words = line.split()
+        words = line.split(";", 1)[0].split()
         if not words:
             continue
 
@@ -90,40 +152,41 @@ def create_paths(gcode_lines):
         params = words[1:]
 
         # Handle the movement command
-        if command == "G1" or command == "G0":
+        if command in ("G0", "G1", "G2", "G3"):
             coord = get_params(params)
             start_pos = toolhead_pos
+            start_e = e
 
             if absolute_coord:
                 toolhead_pos = (
-                    toolhead_pos[0] if coord[0] is None else coord[0],
-                    toolhead_pos[1] if coord[1] is None else coord[1],
-                    toolhead_pos[2] if coord[2] is None else coord[2]
+                    coord.get("X", toolhead_pos[0]),
+                    coord.get("Y", toolhead_pos[1]),
+                    coord.get("Z", toolhead_pos[2]),
                 )
             else:
 
-                new_pos = []
-                for i in range(3):
-                    offset = coord[i] if coord[i] is not None else 0
-                    new_pos.append(toolhead_pos[i] + offset)
-                toolhead_pos = tuple(new_pos)
+                toolhead_pos = tuple(toolhead_pos[i] + coord.get(axis, 0)
+                                     for i, axis in enumerate("XYZ"))
 
-            if coord[3] is not None:
+            if "E" in coord:
                 if absolute_extrude:
-                    e = coord[3]
+                    e = coord["E"]
                 else:
-                    e = e + coord[3]
+                    e = e + coord["E"]
 
 
-            if e > max_e and toolhead_pos != start_pos:
-                # Draw only motion depositing new filament, starting at its origin.
-                if not point_data:
-                    point_data.append(start_pos)
-                point_data.append(toolhead_pos)
+            if command in ("G2", "G3"):
+                try:
+                    points = arc_points(start_pos, toolhead_pos, coord, command == "G2")
+                except ValueError as error:
+                    raise ValueError(f"Line {line_number}: {error}") from error
+                previous, previous_e = start_pos, start_e
+                for step, point in enumerate(points, 1):
+                    step_e = start_e + (e - start_e) * step / len(points)
+                    record_move(previous, point, previous_e, step_e)
+                    previous, previous_e = point, step_e
             else:
-                dump_curve(point_data)
-                point_data = []
-            max_e = max(max_e, e)
+                record_move(start_pos, toolhead_pos, start_e, e)
 
         elif command.startswith("T") and command[1:].isascii() and command[1:].isdigit():
             next_tool = f"T{int(command[1:])}"
@@ -148,17 +211,21 @@ def create_paths(gcode_lines):
         elif command == "G91":
             absolute_coord = False
 
+        elif command in ("G18", "G19", "G90.1"):
+            raise ValueError(f"Line {line_number}: {command} is unsupported; "
+                             "use XY arcs with relative I/J centers")
+
         elif command == "G92":
             coord = get_params(params)
 
             toolhead_pos = (
-                toolhead_pos[0] if coord[0] is None else coord[0],
-                toolhead_pos[1] if coord[1] is None else coord[1],
-                toolhead_pos[2] if coord[2] is None else coord[2]
+                coord.get("X", toolhead_pos[0]),
+                coord.get("Y", toolhead_pos[1]),
+                coord.get("Z", toolhead_pos[2]),
             )
 
-            if coord[3] is not None:
-                e = coord[3]
+            if "E" in coord:
+                e = coord["E"]
                 max_e = e
 
     dump_curve(point_data)
@@ -166,8 +233,8 @@ def create_paths(gcode_lines):
 
 def import_gcode(filepath):
     # Load the gcode file
-    gcode_file = open(filepath, "r")
-    gcode_lines = gcode_file.readlines()
+    with open(filepath, "r") as gcode_file:
+        gcode_lines = gcode_file.readlines()
 
     # Create the geometry
     create_paths(gcode_lines)
@@ -186,7 +253,11 @@ class ImportGCodeOperator(Operator, ImportHelper):
 
         filename, extension = os.path.splitext(self.filepath)
 
-        import_gcode(self.filepath)
+        try:
+            import_gcode(self.filepath)
+        except ValueError as error:
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 @bpy.app.handlers.persistent
