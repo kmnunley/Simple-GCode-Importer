@@ -8,6 +8,7 @@ import bpy
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = ROOT / "tests" / "fixtures" / "pr6-materials.gcode"
 spec = importlib.util.spec_from_file_location(
     "material_test_importer", ROOT / "simple_gcode_importer" / "__init__.py"
 )
@@ -29,7 +30,7 @@ class MaterialImportTests(unittest.TestCase):
                 self.assertAlmostEqual(value, target, places=5)
 
     def test_fixture_splits_materials_and_preserves_boundary(self):
-        objects = self.paths((ROOT / "pr6-materials.gcode").read_text())
+        objects = self.paths(FIXTURE.read_text())
         self.assertEqual(len(objects), 2)
         left, right = objects
         self.assertTrue(left.data.materials[0].name.startswith("T0"))
@@ -108,7 +109,7 @@ class MaterialImportTests(unittest.TestCase):
         before = set(bpy.data.objects)
         importer.register()
         try:
-            result = bpy.ops.import_gcode.operator(filepath=str(ROOT / "pr6-materials.gcode"))
+            result = bpy.ops.import_gcode.operator(filepath=str(FIXTURE))
             self.assertEqual(result, {'FINISHED'})
             self.assertEqual(len(set(bpy.data.objects) - before), 2)
         finally:

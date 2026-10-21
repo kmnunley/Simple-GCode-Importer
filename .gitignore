@@ -1,5 +1,6 @@
-*.gcode
-!/pr6-materials.gcode
+# Keep manual G-code downloads local; test fixtures belong under tests/fixtures.
+/*.gcode
+/*.bgcode
 simple_gcode_importer/__pycache__
 .env
 .env.blender

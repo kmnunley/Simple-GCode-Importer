@@ -15,7 +15,9 @@ To import a GCode file to Blender, simply go to File > Import and select the GCo
 
 Imported paths have a bevel depth of 0.2. Paths from the same tool share a material, named `T0`, `T1`, and so on, so editing that material updates all paths for that tool within the import. Files without tool commands use `T0`. Materials and default bevel support are adapted from [Mitsunori YOSHIDA's contribution in PR #6](https://github.com/kmnunley/Simple-GCode-Importer/pull/6).
 
-For a quick manual check, import `pr6-materials.gcode` from this repository. It should create two connected L-shaped curves: the left curve uses `T0`, and the right uses `T1`. Both should have a bevel depth of 0.2. Set their material colors and switch to Material Preview to distinguish them visually.
+For a quick manual check, import `tests/fixtures/pr6-materials.gcode` from this repository. It should create two connected L-shaped curves: the left curve uses `T0`, and the right uses `T1`. Both should have a bevel depth of 0.2. Set their material colors and switch to Material Preview to distinguish them visually.
+
+Root-level `.gcode` and `.bgcode` files are ignored for local manual testing. Files used by automated tests belong in `tests/fixtures/` and can be committed.
 
 To run the Blender regression checks from the repository root on Windows:
 
