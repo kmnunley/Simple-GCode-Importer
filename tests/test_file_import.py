@@ -140,7 +140,8 @@ class FileImportTests(unittest.TestCase):
         self.assertTrue(hasattr(bpy.types, 'GCODE_FH_import'))
 
 
-suite = unittest.defaultTestLoader.loadTestsFromTestCase(FileImportTests)
-result = unittest.TextTestRunner(verbosity=2).run(suite)
-if not result.wasSuccessful():
-    raise RuntimeError('Blender file import regression checks failed')
+if __name__ == "__main__":
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(FileImportTests)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    if not result.wasSuccessful():
+        raise RuntimeError('Blender file import regression checks failed')

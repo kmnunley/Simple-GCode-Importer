@@ -147,7 +147,7 @@ class ArcImportTests(unittest.TestCase):
         importer.register()
         try:
             result = bpy.ops.import_gcode.operator(
-                filepath=str(ROOT / "tests" / "fixtures" / "pr14-arcs.gcode"))
+                filepath=str(ROOT / "tests" / "fixtures" / "xy_arcs.gcode"))
             self.assertEqual(result, {'FINISHED'})
             objects = list(bpy.context.collection.objects)
             self.assertEqual(len(objects), 5)
@@ -239,7 +239,8 @@ class ArcImportTests(unittest.TestCase):
                     self.paths(command + "\n")
 
 
-suite = unittest.defaultTestLoader.loadTestsFromTestCase(ArcImportTests)
-result = unittest.TextTestRunner(verbosity=2).run(suite)
-if not result.wasSuccessful():
-    raise RuntimeError("Blender arc regression checks failed")
+if __name__ == "__main__":
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(ArcImportTests)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    if not result.wasSuccessful():
+        raise RuntimeError("Blender arc regression checks failed")

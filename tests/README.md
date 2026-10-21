@@ -1,28 +1,33 @@
-# Regression checks
+# Regression tests
 
-Run the reader tests with Python 3.10+ (no Blender required):
+Run the complete suite in Blender 4.2 or newer, from the repository root:
+
+```powershell
+blender --background --factory-startup --python-exit-code 1 --python tests/run_blender.py
+```
+
+The binary reader tests can also run independently with Python 3.10+:
 
 ```powershell
 python -m unittest discover -s tests -p test_bgcode_reader.py
 ```
 
-Run the scene/operator tests in Blender 4.2 or newer:
+| File | Coverage |
+| --- | --- |
+| `test_bgcode_reader.py` | Compression, encoding, checksums, text preservation, and malformed files |
+| `test_arcs.py` | XY arcs, coordinate modes, rounded coordinates, extrusion, and rollback |
+| `test_materials.py` | Tool materials, bevel, travel gaps, and extrusion state |
+| `test_file_import.py` | Registered operators, mixed batches, error reporting, and drop-handler routing |
+| `bgcode_fixtures.py` | Independent binary encoders shared by reader and import tests |
+| `fixtures/` | Small text G-code samples for material and arc imports |
 
-```powershell
-blender --background --factory-startup --python-exit-code 1 --python tests/test_materials.py --python tests/test_arcs.py --python tests/test_file_import.py
-```
+Each test module also supports direct execution in its required Python
+environment. Importing a module does not run its tests. No network access or
+downloaded printer files are required.
 
-The reader checks all 24 combinations of compression, encoding and checksum
-type, multi-block files, text preservation, corrupt/truncated streams, and
-unsupported headers. The Blender checks compare text/binary curve geometry,
-arcs, materials and bevel; mixed multi-file imports; scene rollback; error
-reports; handler registration, drop contexts, and confirmation/browser routing.
-The popup routing test uses Blender's real ImportHelper with a recording window
-manager because background mode does not run operator invoke callbacks. A
-physical mouse drag into a visible Blender window remains a manual UI check.
-
-The fixture encoders in `bgcode_fixtures.py` are independent of the reader and
-follow Prusa's public format specification. No network access is needed.
+Background tests cover drop registration, supported contexts, and popup versus
+file-browser routing. To check the actual UI, drag text and binary G-code files
+into a 3D Viewport or View Layer Outliner, confirm, and verify the resulting paths.
 
 For sandboxed runs, point `TEMP` and `TMP` at a writable temporary directory.
-`.test-tmp/` in the repository is ignored for this purpose.
+The repository's `.test-tmp/` directory is ignored for this purpose.

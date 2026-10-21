@@ -9,7 +9,7 @@ import bpy
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests" / "fixtures" / "pr6-materials.gcode"
+FIXTURE = ROOT / "tests" / "fixtures" / "tool_materials.gcode"
 spec = importlib.util.spec_from_file_location(
     "material_test_importer", ROOT / "simple_gcode_importer" / "__init__.py"
 )
@@ -118,7 +118,8 @@ class MaterialImportTests(unittest.TestCase):
             importer.unregister()
 
 
-suite = unittest.defaultTestLoader.loadTestsFromTestCase(MaterialImportTests)
-result = unittest.TextTestRunner(verbosity=2).run(suite)
-if not result.wasSuccessful():
-    raise RuntimeError("Blender material regression checks failed")
+if __name__ == "__main__":
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(MaterialImportTests)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    if not result.wasSuccessful():
+        raise RuntimeError("Blender material regression checks failed")
