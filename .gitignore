@@ -1,4 +1,5 @@
 *.gcode
+!/pr6-materials.gcode
 simple_gcode_importer/__pycache__
 .env
 .env.blender
