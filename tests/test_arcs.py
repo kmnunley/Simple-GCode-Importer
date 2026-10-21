@@ -2,8 +2,10 @@
 
 import importlib.util
 import math
+import io
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import bpy
 
@@ -165,6 +167,43 @@ class ArcImportTests(unittest.TestCase):
             with self.subTest(arc=arc):
                 with self.assertRaisesRegex(ValueError, "Line 2:"):
                     self.paths(f"G0 X10\n{arc}\n")
+
+    def test_failed_imports_remove_only_their_own_scene_data(self):
+        # Existing data may have the same names as data made by the importer.
+        curve = bpy.data.curves.new("Path", type='CURVE')
+        material = bpy.data.materials.new("T0")
+        curve.materials.append(material)
+        existing = bpy.data.objects.new("Path", curve)
+        bpy.context.collection.objects.link(existing)
+        before = {name: set(getattr(bpy.data, name))
+                  for name in ("objects", "curves", "materials")}
+        prefix = "G1 X10 E1\nT1\nG1 X20 E1\nG0 X30\n"
+        for invalid in ("G3 X40 Y10 R1 E1", "G18", "G1 Xinvalid E1"):
+            # Retrying the same failed import must not accumulate scene data.
+            for attempt in range(2):
+                with self.subTest(invalid=invalid, attempt=attempt):
+                    with self.assertRaises(ValueError):
+                        importer.create_paths((prefix + invalid + "\n").splitlines(True))
+                    for name, original in before.items():
+                        self.assertEqual(set(getattr(bpy.data, name)), original)
+                    self.assertIn(existing, list(bpy.context.collection.objects))
+                    self.assertIs(existing.data, curve)
+                    self.assertIs(curve.materials[0], material)
+
+    def test_operator_failure_leaves_scene_data_unchanged(self):
+        before = {name: set(getattr(bpy.data, name))
+                  for name in ("objects", "curves", "materials")}
+        importer.register()
+        try:
+            text = "G1 X10 E1\nG0 X20\nG3 X30 Y10 R1 E1\n"
+            with patch("builtins.open", return_value=io.StringIO(text)):
+                # Blender exposes ERROR reports from CANCELLED operators as RuntimeError.
+                with self.assertRaisesRegex(RuntimeError, "Line 3:"):
+                    bpy.ops.import_gcode.operator(filepath="failed-import.gcode")
+            for name, original in before.items():
+                self.assertEqual(set(getattr(bpy.data, name)), original)
+        finally:
+            importer.unregister()
 
     def test_unsupported_plane_and_center_modes_fail_explicitly(self):
         for command in ("G18", "G19", "G90.1"):

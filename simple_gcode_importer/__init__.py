@@ -76,6 +76,19 @@ def arc_points(start, end, coord, clockwise):
 
 
 def create_paths(gcode_lines):
+    """Create paths atomically, rolling back this import's data on failure."""
+    created_data = {name: [] for name in ("objects", "curves", "materials")}
+    try:
+        _create_paths(gcode_lines, created_data)
+    except Exception:
+        # Remove users before their data, preserving all pre-existing scene data.
+        for name, blocks in created_data.items():
+            for block in reversed(blocks):
+                getattr(bpy.data, name).remove(block, do_unlink=True)
+        raise
+
+
+def _create_paths(gcode_lines, created_data):
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
 
@@ -96,11 +109,13 @@ def create_paths(gcode_lines):
             return
 
         curve_data = bpy.data.curves.new("Path", type='CURVE')
+        created_data["curves"].append(curve_data)
         curve_data.dimensions = '3D'
         curve_data.use_fill_caps = True
         curve_data.bevel_depth = 0.2
         if current_tool not in materials:
             materials[current_tool] = bpy.data.materials.new(current_tool)
+            created_data["materials"].append(materials[current_tool])
         curve_data.materials.append(materials[current_tool])
 
         curve_spline = curve_data.splines.new('BEZIER')
@@ -111,6 +126,7 @@ def create_paths(gcode_lines):
             bezier_point.handle_right = point
 
         curve_object = bpy.data.objects.new("Path", curve_data)
+        created_data["objects"].append(curve_object)
         bpy.context.collection.objects.link(curve_object)
 
     def get_params(params):
