@@ -15,16 +15,6 @@ To import a GCode file to Blender, simply go to File > Import and select the GCo
 
 Imported paths have a bevel depth of 0.2. Paths from the same tool share a material, named `T0`, `T1`, and so on, so editing that material updates all paths for that tool within the import. Files without tool commands use `T0`. Materials and default bevel support are adapted from [Mitsunori YOSHIDA's contribution in PR #6](https://github.com/kmnunley/Simple-GCode-Importer/pull/6).
 
-For a quick manual check, import `tests/fixtures/pr6-materials.gcode` from this repository. It should create two connected L-shaped curves: the left curve uses `T0`, and the right uses `T1`. Both should have a bevel depth of 0.2. Set their material colors and switch to Material Preview to distinguish them visually.
-
-Root-level `.gcode` and `.bgcode` files are ignored for local manual testing. Files used by automated tests belong in `tests/fixtures/` and can be committed.
-
-To run the Blender regression checks from the repository root on Windows:
-
-```powershell
-& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python-exit-code 1 --python tests/test_materials.py
-```
-
 ## FAQ
 **How long do models take to import?**<br>
 This depends heavily on the computer you are running on, but imports can take anywhere from just a couple seconds to several minutes depening on the size and complexity of the model that is being imported.
