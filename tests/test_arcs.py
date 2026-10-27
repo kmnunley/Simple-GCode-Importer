@@ -27,10 +27,10 @@ class ArcImportTests(unittest.TestCase):
 
     def paths(self, text):
         importer.create_paths(text.splitlines(keepends=True))
-        return list(bpy.context.collection.objects)
+        return [obj for obj in bpy.context.collection.objects if obj.type == 'CURVE']
 
-    def points(self, obj):
-        return [tuple(p.co) for p in obj.data.splines[0].bezier_points]
+    def points(self, obj, spline=0):
+        return [tuple(p.co) for p in obj.data.splines[spline].bezier_points]
 
     def assert_point(self, point, expected):
         for actual, target in zip(point, expected):
@@ -112,11 +112,11 @@ class ArcImportTests(unittest.TestCase):
                 self.assertEqual(self.paths(f"G0 X10\nG3 X0 Y10 I-10{extrusion}\n"), [])
 
     def test_travel_arc_splits_paths_and_updates_next_start(self):
-        left, right = self.paths("G1 X10 E1\nG3 X0 Y10 I-10\nG1 X-10 E1\n")
-        self.assertEqual(len(self.points(left)), 2)
-        self.assert_point(self.points(left)[-1], (10, 0, 0))
-        self.assert_point(self.points(right)[0], (0, 10, 0))
-        self.assertIs(left.data.materials[0], right.data.materials[0])
+        obj, = self.paths("G1 X10 E1\nG3 X0 Y10 I-10\nG1 X-10 E1\n")
+        self.assertEqual(len(self.points(obj)), 2)
+        self.assert_point(self.points(obj)[-1], (10, 0, 0))
+        self.assert_point(self.points(obj, 1)[0], (0, 10, 0))
+        self.assertEqual(len(obj.data.splines), 2)
 
     def test_recovery_draws_only_after_previous_extrusion_is_restored(self):
         obj, = self.paths("G0 X10\nG92 E1\nM82\nG1 E0\nG3 X0 Y10 I-10 E2\n")
@@ -129,8 +129,9 @@ class ArcImportTests(unittest.TestCase):
         objects = self.paths("M82\nG0 X10\nG3 X0 Y10 I-10 E10\n"
                              "T1\nG3 X-10 Y0 J-10 E1\n"
                              "T0\nG3 X0 Y-10 I10 E11\n")
-        self.assertEqual(len(objects), 3)
-        self.assertIs(objects[0].data.materials[0], objects[2].data.materials[0])
+        self.assertEqual(len(objects), 2)
+        self.assertEqual(len(objects[0].data.splines), 2)
+        self.assert_point(self.points(objects[0], 1)[-1], (0, -10, 0))
         self.assertIsNot(objects[0].data.materials[0], objects[1].data.materials[0])
         for index, obj in enumerate(objects):
             self.assertEqual(len(self.points(obj)), 9)
@@ -149,15 +150,17 @@ class ArcImportTests(unittest.TestCase):
             result = bpy.ops.import_gcode.operator(
                 filepath=str(ROOT / "tests" / "fixtures" / "xy_arcs.gcode"))
             self.assertEqual(result, {'FINISHED'})
-            objects = list(bpy.context.collection.objects)
-            self.assertEqual(len(objects), 5)
+            objects = [obj for obj in bpy.context.collection.objects if obj.type == 'CURVE']
+            self.assertEqual(len(objects), 2)
+            paths = [self.points(obj, i) for obj in objects
+                     for i in range(len(obj.data.splines))]
+            self.assertEqual(len(paths), 5)
             # Rounded center calculations may require one extra segment to
             # keep the maximum angular step, especially at a quadrant boundary.
-            for obj, minimum in zip(objects, (9, 9, 25, 33, 33)):
-                self.assertIn(len(self.points(obj)), (minimum, minimum + 1))
-            self.assertIs(objects[0].data.materials[0], objects[2].data.materials[0])
-            self.assertIs(objects[3].data.materials[0], objects[4].data.materials[0])
-            self.assert_point(self.points(objects[-1])[-1], (40, 30, 10.2))
+            for points, minimum in zip(paths, (9, 9, 25, 33, 33)):
+                self.assertIn(len(points), (minimum, minimum + 1))
+            self.assertIsNot(objects[0].data.materials[0], objects[1].data.materials[0])
+            self.assert_point(paths[-1][-1], (40, 30, 10.2))
         finally:
             importer.unregister()
 

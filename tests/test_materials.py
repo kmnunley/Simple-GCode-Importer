@@ -22,10 +22,10 @@ class MaterialImportTests(unittest.TestCase):
     def paths(self, text):
         before = set(bpy.data.objects)
         importer.create_paths(text.splitlines(keepends=True))
-        return [obj for obj in bpy.context.collection.objects if obj not in before]
+        return [obj for obj in bpy.context.collection.objects if obj not in before and obj.type == 'CURVE']
 
-    def assert_points(self, obj, expected):
-        actual = obj.data.splines[0].bezier_points
+    def assert_points(self, obj, expected, spline=0):
+        actual = obj.data.splines[spline].bezier_points
         self.assertEqual(len(actual), len(expected))
         for point, coords in zip(actual, expected):
             for value, target in zip(point.co, coords):
@@ -73,9 +73,10 @@ class MaterialImportTests(unittest.TestCase):
         objects = self.paths(
             "G0 X10\nG1 X20 E1\nG0 X100\nG1 X110 E1\n"
         )
-        self.assertEqual(len(objects), 2)
+        self.assertEqual(len(objects), 1)
+        self.assertEqual(len(objects[0].data.splines), 2)
         self.assert_points(objects[0], [(10, 0, 0), (20, 0, 0)])
-        self.assert_points(objects[1], [(100, 0, 0), (110, 0, 0)])
+        self.assert_points(objects[0], [(100, 0, 0), (110, 0, 0)], spline=1)
 
     def test_stationary_priming_and_unretraction_do_not_create_geometry(self):
         objects = self.paths(
@@ -93,19 +94,19 @@ class MaterialImportTests(unittest.TestCase):
             "M82\nG1 X0 E0\nG1 X10 E10\n"
             "T1\nG1 X20 E1\nT0\nG1 X30 E11\n"
         )
-        self.assertEqual(len(objects), 3)
-        self.assertIs(objects[0].data.materials[0], objects[2].data.materials[0])
+        self.assertEqual(len(objects), 2)
+        self.assertEqual(len(objects[0].data.splines), 2)
         self.assertIsNot(objects[0].data.materials[0], objects[1].data.materials[0])
         self.assert_points(objects[1], [(10, 0, 0), (20, 0, 0)])
-        self.assert_points(objects[2], [(20, 0, 0), (30, 0, 0)])
+        self.assert_points(objects[0], [(20, 0, 0), (30, 0, 0)], spline=1)
 
     def test_paths_separated_by_retraction_share_material(self):
         objects = self.paths(
             "G1 X0 E1\nG1 X10 E1\nG1 E-1\nG92 E0\n"
             "G1 X20 E1\nG1 X30 E1\nG1 E-1\n"
         )
-        self.assertEqual(len(objects), 2)
-        self.assertIs(objects[0].data.materials[0], objects[1].data.materials[0])
+        self.assertEqual(len(objects), 1)
+        self.assertEqual(len(objects[0].data.splines), 2)
 
     def test_registration_and_operator_import(self):
         before = set(bpy.data.objects)
@@ -113,7 +114,7 @@ class MaterialImportTests(unittest.TestCase):
         try:
             result = bpy.ops.import_gcode.operator(filepath=str(FIXTURE))
             self.assertEqual(result, {'FINISHED'})
-            self.assertEqual(len(set(bpy.data.objects) - before), 2)
+            self.assertEqual(len(set(bpy.data.objects) - before), 3)
         finally:
             importer.unregister()
 

@@ -20,7 +20,8 @@ importer = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
-TEXT = 'M83\nG0 X10\nG3 X0 Y10 I-10 E1\nT1\nG1 X-10 E1\n'
+TEXT = ('M83\nG0 X10\nG3 X0 Y10 I-10 E1\nT1\nG1 X-10 E1\n'
+        'T0\nG0 X20\nG1 X30 E1\n')
 
 
 class FileImportTests(unittest.TestCase):
@@ -43,10 +44,11 @@ class FileImportTests(unittest.TestCase):
                 for kind in ('objects', 'curves', 'materials')}
 
     def geometry(self):
-        return sorted((tuple(tuple(round(v, 5) for v in p.co)
-                             for p in obj.data.splines[0].bezier_points),
+        return sorted((tuple(tuple(tuple(round(v, 5) for v in p.co)
+                                   for p in spline.bezier_points)
+                             for spline in obj.data.splines),
                        round(obj.data.bevel_depth, 5), obj.data.use_fill_caps)
-                      for obj in bpy.context.collection.objects)
+                      for obj in bpy.context.collection.objects if obj.type == 'CURVE')
 
     def test_binary_import_matches_text_arcs_materials_and_bevel(self):
         text = self.write('sample.gcode', TEXT.encode())
@@ -61,9 +63,9 @@ class FileImportTests(unittest.TestCase):
                     path = self.write('sample.bgcode', binary(TEXT, compression, encoding))
                     self.assertEqual(bpy.ops.import_gcode.operator(filepath=path), {'FINISHED'})
                     self.assertEqual(self.geometry(), expected)
-                    objects = list(bpy.context.collection.objects)
+                    objects = [obj for obj in bpy.context.collection.objects if obj.type == 'CURVE']
                     self.assertIsNot(objects[0].data.materials[0], objects[1].data.materials[0])
-                    for obj in objects:
+                    for obj in list(bpy.data.objects):
                         bpy.data.objects.remove(obj, do_unlink=True)
 
     def test_mixed_multi_file_import(self):
@@ -72,7 +74,40 @@ class FileImportTests(unittest.TestCase):
         result = bpy.ops.import_gcode.operator(
             directory=str(self.folder), files=[{'name': 'one.gcode'}, {'name': 'two.bgcode'}])
         self.assertEqual(result, {'FINISHED'})
-        self.assertEqual(len(bpy.context.collection.objects), 4)
+        self.assertEqual(len(bpy.context.collection.objects), 6)
+        roots = [obj for obj in bpy.context.collection.objects if obj.type == 'EMPTY']
+        self.assertEqual({root.name for root in roots}, {'one', 'two'})
+        for root in roots:
+            self.assertEqual(len(root.children), 2)
+            self.assertTrue(all(obj.type == 'CURVE' for obj in root.children))
+            self.assertEqual({obj.data.materials[0].name.split('.')[0]
+                              for obj in root.children}, {'T0', 'T1'})
+        self.assertIsNot(roots[0].children[0].data, roots[1].children[0].data)
+
+    def test_repeated_imports_have_independent_roots_and_curve_settings(self):
+        path = self.write('part.gcode', b'G1 X10 E1\nG0 X20\nG1 X30 E1\n')
+        importer.import_gcode(path)
+        importer.import_gcode(path)
+        roots = sorted((obj for obj in bpy.context.collection.objects
+                        if obj.type == 'EMPTY'), key=lambda obj: obj.name)
+        self.assertEqual([root.name for root in roots], ['part', 'part.001'])
+        first, second = (root.children[0] for root in roots)
+        self.assertEqual(len(first.data.splines), 2)
+        self.assertIsNot(first.data, second.data)
+        self.assertIsNot(first.data.materials[0], second.data.materials[0])
+        first.data.bevel_depth = .5
+        self.assertAlmostEqual(second.data.bevel_depth, .2)
+        roots[0].location = (5, 6, 7)
+        bpy.context.view_layer.update()
+        point = first.matrix_world @ first.data.splines[1].bezier_points[0].co
+        self.assertEqual(tuple(point), (25, 6, 7))
+        self.assertEqual(tuple(second.matrix_world.translation), (0, 0, 0))
+
+    def test_travel_only_import_creates_no_root_or_tool_data(self):
+        before = self.snapshot()
+        path = self.write('travel.gcode', b'G0 X10\nT1\nG0 X20\n')
+        importer.import_gcode(path)
+        self.assertEqual(self.snapshot(), before)
 
     def test_batch_failure_rolls_back_successful_files_and_partial_geometry(self):
         importer.create_paths(['G1 X5 E1'])

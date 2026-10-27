@@ -3,7 +3,7 @@ import os
 import math
 from contextlib import contextmanager
 
-from bpy.props import StringProperty, CollectionProperty
+from bpy.props import BoolProperty, StringProperty, CollectionProperty
 from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
 from bpy.types import Operator, OperatorFileListElement, FileHandler
 
@@ -97,13 +97,13 @@ def import_transaction():
         raise
 
 
-def create_paths(gcode_lines):
+def create_paths(gcode_lines, *, exclude_wipe_tower=True):
     """Create paths atomically, rolling back this import's data on failure."""
     with import_transaction() as created_data:
-        _create_paths(gcode_lines, created_data)
+        _create_paths(gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower)
 
 
-def _create_paths(gcode_lines, created_data):
+def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower=True):
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
 
@@ -116,22 +116,40 @@ def _create_paths(gcode_lines, created_data):
     max_e = 0
     point_data = []
     current_tool = "T0"
-    materials = {}
+    tool_curves = {}
+    root = None
     extruder_positions = {}
+    tower_role = False
+    tower_block = False
 
     def dump_curve(points):
+        nonlocal root
         if len(points) < 2:
             return
 
-        curve_data = bpy.data.curves.new("Path", type='CURVE')
-        created_data["curves"].append(curve_data)
-        curve_data.dimensions = '3D'
-        curve_data.use_fill_caps = True
-        curve_data.bevel_depth = 0.2
-        if current_tool not in materials:
-            materials[current_tool] = bpy.data.materials.new(current_tool)
-            created_data["materials"].append(materials[current_tool])
-        curve_data.materials.append(materials[current_tool])
+        if root is None:
+            root = bpy.data.objects.new(name, None)
+            created_data["objects"].append(root)
+            root.empty_display_type = 'PLAIN_AXES'
+            bpy.context.collection.objects.link(root)
+
+        if current_tool not in tool_curves:
+            curve_data = bpy.data.curves.new(current_tool, type='CURVE')
+            created_data["curves"].append(curve_data)
+            curve_data.dimensions = '3D'
+            curve_data.use_fill_caps = True
+            curve_data.bevel_depth = 0.2
+            material = bpy.data.materials.new(current_tool)
+            created_data["materials"].append(material)
+            curve_data.materials.append(material)
+
+            curve_object = bpy.data.objects.new(current_tool, curve_data)
+            created_data["objects"].append(curve_object)
+            bpy.context.collection.objects.link(curve_object)
+            curve_object.parent = root
+            tool_curves[current_tool] = curve_data
+
+        curve_data = tool_curves[current_tool]
 
         curve_spline = curve_data.splines.new('BEZIER')
         curve_spline.bezier_points.add(len(points) - 1)
@@ -139,10 +157,6 @@ def _create_paths(gcode_lines, created_data):
             bezier_point.co = point
             bezier_point.handle_left = point
             bezier_point.handle_right = point
-
-        curve_object = bpy.data.objects.new("Path", curve_data)
-        created_data["objects"].append(curve_object)
-        bpy.context.collection.objects.link(curve_object)
 
     def get_params(params):
         coord = {}
@@ -156,7 +170,10 @@ def _create_paths(gcode_lines, created_data):
 
     def record_move(start, end, start_e, end_e):
         nonlocal point_data, max_e
-        if end_e > max_e and end != start:
+        if exclude_wipe_tower and (tower_role or tower_block):
+            # Suppress geometry only: excluded moves still advance extrusion state.
+            point_data = []
+        elif end_e > max_e and end != start:
             # Unretraction restores old filament before depositing anything new.
             if start_e < max_e:
                 fraction = (max_e - start_e) / (end_e - start_e)
@@ -173,8 +190,24 @@ def _create_paths(gcode_lines, created_data):
 
     # Iterate through the gcode instructions
     for line_number, line in enumerate(gcode_lines, 1):
+        code, separator, comment = line.partition(";")
+        if exclude_wipe_tower and separator and not code.strip():
+            marker = comment.strip().casefold()
+            was_tower = tower_role or tower_block
+            if marker.startswith(("type:", "feature:")):
+                tower_role = marker.split(":", 1)[1].strip() in ("wipe tower", "prime tower")
+            elif marker == "wipe_tower_start":
+                tower_block = True
+            elif marker == "wipe_tower_end":
+                tower_block = False
+                tower_role = False
+            if was_tower != (tower_role or tower_block):
+                # Finish model geometry before entering the tower and never retain
+                # a boundary point across excluded sections.
+                dump_curve(point_data)
+                point_data = []
         # Split the line into words
-        words = line.split(";", 1)[0].split()
+        words = code.split()
         if not words:
             continue
 
@@ -262,15 +295,17 @@ def _create_paths(gcode_lines, created_data):
     dump_curve(point_data)
 
 
-def import_gcode(filepath):
-    import_gcodes([filepath])
+def import_gcode(filepath, *, exclude_wipe_tower=True):
+    import_gcodes([filepath], exclude_wipe_tower=exclude_wipe_tower)
 
 
-def import_gcodes(filepaths):
+def import_gcodes(filepaths, *, exclude_wipe_tower=True):
     with import_transaction() as created_data:
         for filepath in filepaths:
             try:
-                _create_paths(load(filepath), created_data)
+                _create_paths(load(filepath), created_data,
+                              name=os.path.splitext(os.path.basename(filepath))[0],
+                              exclude_wipe_tower=exclude_wipe_tower)
             except (OSError, ValueError) as error:
                 raise ValueError(f"{os.path.basename(filepath)}: {error}") from error
 
@@ -287,6 +322,18 @@ class ImportGCodeOperator(Operator, ImportHelper):
     files: CollectionProperty(type=OperatorFileListElement)
     directory: StringProperty(subtype='DIR_PATH')
 
+    exclude_wipe_tower: BoolProperty(
+        name="Exclude wipe/prime tower (PrusaSlicer and OrcaSlicer only)",
+        description="Skip paths marked as wipe/prime tower by PrusaSlicer or OrcaSlicer; "
+                    "files without recognized markers are unchanged",
+        default=True,
+    )
+
+    def draw(self, context):
+        column = self.layout.column(align=True)
+        column.prop(self, "exclude_wipe_tower", text="Exclude wipe/prime tower")
+        column.label(text="PrusaSlicer and OrcaSlicer only")
+
     def invoke(self, context, event):
         # A drop supplies the path already; show confirmation instead of reopening
         # the file browser. Menu imports still open the normal file selector.
@@ -296,7 +343,7 @@ class ImportGCodeOperator(Operator, ImportHelper):
         filepaths = ([os.path.join(self.directory, item.name) for item in self.files]
                      if self.files else [self.filepath])
         try:
-            import_gcodes(filepaths)
+            import_gcodes(filepaths, exclude_wipe_tower=self.exclude_wipe_tower)
         except (OSError, ValueError) as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
