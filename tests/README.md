@@ -31,6 +31,7 @@ python -m unittest discover -s tests -p test_bgcode_reader.py
 | File | Coverage |
 | --- | --- |
 | `test_bgcode_reader.py` | Compression, encoding, checksums, text preservation, and malformed files |
+| `test_bead_profile.py` | One common profile, one curve per tool, purge exclusion, fallback/settings selection, volume estimates, native bead dimensions and normals, rounded ends, closed loops, metadata, transforms and rollback |
 | `test_arcs.py` | XY arcs, coordinate modes, rounded coordinates, extrusion, and rollback |
 | `test_materials.py` | Per-tool curves and materials, bevel, disconnected splines, and extrusion state |
 | `test_wipe_tower.py` | Default-on import option, PrusaSlicer/OrcaSlicer markers, excluded geometry and preserved state, text/BGCode batches, and rollback |
@@ -45,6 +46,12 @@ downloaded printer files are required.
 Background tests cover drop registration, supported contexts, and popup versus
 file-browser routing. To check the actual UI, drag text and binary G-code files
 into a 3D Viewport or View Layer Outliner, confirm, and verify the resulting paths.
+
+The existing exact centerline/state suites explicitly select Round (legacy).
+The bead suite exercises the new default, including evaluated geometry and
+the original file-parent/tool-curve hierarchy. Purge regressions deliberately
+vary startup extrusion, width and elevation without changing the selected
+model profile, and test fallback instead of sampling files without boundaries.
 
 For sandboxed runs, point `TEMP` and `TMP` at a writable temporary directory.
 The repository's `.test-tmp/` directory is ignored for this purpose.

@@ -3,11 +3,12 @@ import os
 import math
 from contextlib import contextmanager
 
-from bpy.props import BoolProperty, StringProperty, CollectionProperty
+from bpy.props import BoolProperty, StringProperty, CollectionProperty, EnumProperty, FloatProperty
 from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
 from bpy.types import Operator, OperatorFileListElement, FileHandler
 
 from .gcode_lib import load
+from .extrusion import ProfileEstimator
 
 
 bl_info = {
@@ -30,7 +31,7 @@ ARC_TOLERANCE = 1e-7
 ARC_RADIUS_ABS_TOLERANCE = 0.003
 
 
-def arc_points(start, end, coord, clockwise):
+def arc_points(start, end, coord, clockwise, *, with_length=False):
     """Sample an XY arc, with relative I/J centers and linear Z interpolation."""
     if "K" in coord:
         raise ValueError("K arc offsets are unsupported; use XY arcs with I/J or R")
@@ -80,7 +81,66 @@ def arc_points(start, end, coord, clockwise):
                        start[2] + (end[2] - start[2]) * fraction))
     # Keep adjacent moves joined exactly, even after trig/rounding errors.
     points[-1] = end
+    if with_length:
+        return points, math.hypot(radius * abs(sweep), end[2] - start[2])
     return points
+
+
+def build_bead_paths(paths_by_tool, created_data, name, profile):
+    """One native curve per tool, all using the same flattened profile."""
+    if not paths_by_tool:
+        return
+    from mathutils import Vector
+
+    root = bpy.data.objects.new(name, None)
+    created_data['objects'].append(root)
+    root.empty_display_type = 'PLAIN_AXES'
+    root['bead_width'] = profile.width
+    root['bead_height'] = profile.height
+    root['bead_profile_source'] = profile.source
+    root['bead_profile_assumptions'] = ', '.join(profile.assumptions)
+    bpy.context.collection.objects.link(root)
+
+    def nose(point, direction):
+        tangent = direction.normalized()
+        return [(point + tangent * profile.width / 2 * math.sin(i * math.pi / 10),
+                 0 if i == 5 else math.cos(i * math.pi / 10)) for i in range(1, 6)]
+
+    for tool, paths in paths_by_tool.items():
+        data = bpy.data.curves.new(tool, 'CURVE')
+        created_data['curves'].append(data)
+        data.dimensions = '3D'
+        data.twist_mode = 'Z_UP'
+        data.resolution_u = 1
+        data.bevel_depth = profile.height / 2
+        data.extrude = (profile.width - profile.height) / 2
+        data.bevel_resolution = 3
+        data.use_fill_caps = False
+        material = bpy.data.materials.new(tool)
+        created_data['materials'].append(material)
+        data.materials.append(material)
+        obj = bpy.data.objects.new(tool, data)
+        created_data['objects'].append(obj)
+        bpy.context.collection.objects.link(obj)
+        obj.parent = root
+        for points in paths:
+            centers = [Vector(p) - Vector((0, 0, profile.height / 2)) for p in points]
+            closed = (centers[0] - centers[-1]).length < 1e-6
+            if closed:
+                stations = [(p, 1) for p in centers[:-1]]
+            else:
+                stations = list(reversed(nose(centers[0], centers[0]-centers[1])))
+                stations += [(p, 1) for p in centers]
+                stations += nose(centers[-1], centers[-1]-centers[-2])
+            spline = data.splines.new('BEZIER')
+            spline.bezier_points.add(len(stations)-1)
+            spline.use_cyclic_u = closed
+            for point, (co, radius) in zip(spline.bezier_points, stations):
+                point.co = point.handle_left = point.handle_right = co
+                point.radius = radius
+                # Native extrusion extends along the profile's vertical axis;
+                # rotate it sideways to keep the bead wide and vertically thin.
+                point.tilt = math.pi / 2
 
 
 @contextmanager
@@ -97,13 +157,22 @@ def import_transaction():
         raise
 
 
-def create_paths(gcode_lines, *, exclude_wipe_tower=True):
+def create_paths(gcode_lines, *, exclude_wipe_tower=True, profile='BEAD',
+                 filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     """Create paths atomically, rolling back this import's data on failure."""
     with import_transaction() as created_data:
-        _create_paths(gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower)
+        return _create_paths(gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower,
+                             profile=profile, filament_diameter=filament_diameter,
+                             layer_height=layer_height, extrusion_width=extrusion_width)
 
 
-def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower=True):
+def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
+                  profile='BEAD', filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
+    if profile not in ('BEAD', 'ROUND'):
+        raise ValueError('Unknown extrusion profile')
+    gcode_lines = list(gcode_lines)
+    estimator = ProfileEstimator(gcode_lines, filament_diameter, layer_height, extrusion_width)
+    bead_paths = {}
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
 
@@ -125,6 +194,10 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
     def dump_curve(points):
         nonlocal root
         if len(points) < 2:
+            return
+
+        if profile == 'BEAD':
+            bead_paths.setdefault(current_tool, []).append(points[:])
             return
 
         if root is None:
@@ -168,12 +241,19 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
                 coord[param[0]] = value
         return coord
 
-    def record_move(start, end, start_e, end_e):
+    def record_move(start, end, start_e, end_e, length=None):
         nonlocal point_data, max_e
         if exclude_wipe_tower and (tower_role or tower_block):
             # Suppress geometry only: excluded moves still advance extrusion state.
             point_data = []
         elif end_e > max_e and end != start:
+            move_length = math.dist(start, end) if length is None else length
+            emitted_e = end_e - max(start_e, max_e)
+            if profile == 'BEAD' and estimator.flow.get(current_tool, 1) == 0:
+                dump_curve(point_data)
+                point_data = []
+                max_e = max(max_e, end_e)
+                return
             # Unretraction restores old filament before depositing anything new.
             if start_e < max_e:
                 fraction = (max_e - start_e) / (end_e - start_e)
@@ -183,6 +263,9 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
             if not point_data:
                 point_data.append(start)
             point_data.append(end)
+            if profile == 'BEAD':
+                estimator.observe(current_tool, start, end, emitted_e,
+                                  move_length * emitted_e / (end_e-start_e))
         else:
             dump_curve(point_data)
             point_data = []
@@ -191,6 +274,8 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
     # Iterate through the gcode instructions
     for line_number, line in enumerate(gcode_lines, 1):
         code, separator, comment = line.partition(";")
+        if separator and profile == 'BEAD':
+            estimator.comment(comment)
         if exclude_wipe_tower and separator and not code.strip():
             marker = comment.strip().casefold()
             was_tower = tower_role or tower_block
@@ -241,13 +326,14 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
 
             if command in ("G2", "G3"):
                 try:
-                    points = arc_points(start_pos, toolhead_pos, coord, command == "G2")
+                    points, length = arc_points(start_pos, toolhead_pos, coord,
+                                               command == "G2", with_length=True)
                 except ValueError as error:
                     raise ValueError(f"Line {line_number}: {error}") from error
                 previous, previous_e = start_pos, start_e
                 for step, point in enumerate(points, 1):
                     step_e = start_e + (e - start_e) * step / len(points)
-                    record_move(previous, point, previous_e, step_e)
+                    record_move(previous, point, previous_e, step_e, length / len(points))
                     previous, previous_e = point, step_e
             else:
                 record_move(start_pos, toolhead_pos, start_e, e)
@@ -275,6 +361,15 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
         elif command == "G91":
             absolute_coord = False
 
+        elif command in ('M200', 'M221') and profile == 'BEAD':
+            try:
+                estimator.command(command, params, current_tool)
+            except ValueError as error:
+                raise ValueError(f'Line {line_number}: {error}') from error
+
+        elif command == 'G20' and profile == 'BEAD':
+            raise ValueError(f'Line {line_number}: inch units are unsupported; use G21 millimeters')
+
         elif command in ("G18", "G19", "G90.1"):
             raise ValueError(f"Line {line_number}: {command} is unsupported; "
                              "use XY arcs with relative I/J centers")
@@ -293,21 +388,28 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
                 max_e = e
 
     dump_curve(point_data)
+    if profile == 'BEAD' and bead_paths:
+        bead_profile = estimator.result()
+        build_bead_paths(bead_paths, created_data, name, bead_profile)
+        return list(bead_profile.assumptions)
+    return []
 
 
-def import_gcode(filepath, *, exclude_wipe_tower=True):
-    import_gcodes([filepath], exclude_wipe_tower=exclude_wipe_tower)
+def import_gcode(filepath, **options):
+    return import_gcodes([filepath], **options)
 
 
-def import_gcodes(filepaths, *, exclude_wipe_tower=True):
+def import_gcodes(filepaths, **options):
+    assumptions = set()
     with import_transaction() as created_data:
         for filepath in filepaths:
             try:
-                _create_paths(load(filepath), created_data,
+                assumptions.update(_create_paths(load(filepath, include_metadata=True), created_data,
                               name=os.path.splitext(os.path.basename(filepath))[0],
-                              exclude_wipe_tower=exclude_wipe_tower)
+                              **options))
             except (OSError, ValueError) as error:
                 raise ValueError(f"{os.path.basename(filepath)}: {error}") from error
+    return sorted(assumptions)
 
 
 class ImportGCodeOperator(Operator, ImportHelper):
@@ -322,6 +424,13 @@ class ImportGCodeOperator(Operator, ImportHelper):
     files: CollectionProperty(type=OperatorFileListElement)
     directory: StringProperty(subtype='DIR_PATH')
 
+    profile: EnumProperty(name='Extrusion profile', items=[
+        ('BEAD', 'Printed bead', 'One flattened profile for the entire print, with rounded ends'),
+        ('ROUND', 'Round (legacy)', 'Original circular bevel and flat caps')], default='BEAD')
+    filament_diameter: FloatProperty(name='Fallback filament diameter (mm)', default=1.75, min=.01)
+    layer_height: FloatProperty(name='Fallback layer height (mm)', default=.2, min=.001)
+    extrusion_width: FloatProperty(name='Fallback bead width (mm)', default=.45, min=.001)
+
     exclude_wipe_tower: BoolProperty(
         name="Exclude wipe/prime tower (PrusaSlicer and OrcaSlicer only)",
         description="Skip paths marked as wipe/prime tower by PrusaSlicer or OrcaSlicer; "
@@ -331,6 +440,11 @@ class ImportGCodeOperator(Operator, ImportHelper):
 
     def draw(self, context):
         column = self.layout.column(align=True)
+        column.prop(self, 'profile')
+        if self.profile == 'BEAD':
+            column.prop(self, 'filament_diameter')
+            column.prop(self, 'layer_height')
+            column.prop(self, 'extrusion_width')
         column.prop(self, "exclude_wipe_tower", text="Exclude wipe/prime tower")
         column.label(text="PrusaSlicer and OrcaSlicer only")
 
@@ -343,7 +457,11 @@ class ImportGCodeOperator(Operator, ImportHelper):
         filepaths = ([os.path.join(self.directory, item.name) for item in self.files]
                      if self.files else [self.filepath])
         try:
-            import_gcodes(filepaths, exclude_wipe_tower=self.exclude_wipe_tower)
+            assumptions = import_gcodes(filepaths, exclude_wipe_tower=self.exclude_wipe_tower,
+                profile=self.profile, filament_diameter=self.filament_diameter,
+                layer_height=self.layer_height, extrusion_width=self.extrusion_width)
+            if assumptions:
+                self.report({'WARNING'}, 'Bead profile used: ' + ', '.join(assumptions))
         except (OSError, ValueError) as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}

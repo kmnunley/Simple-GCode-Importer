@@ -13,6 +13,13 @@ importer = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
+# Keep exact centerline/state regressions on the original representation.
+# The default printed-bead geometry is covered by test_bead_profile.py.
+from functools import partial
+importer.create_paths = partial(importer.create_paths, profile='ROUND')
+importer.import_gcode = partial(importer.import_gcode, profile='ROUND')
+
+
 
 class WipeTowerTests(unittest.TestCase):
     def setUp(self):
@@ -86,7 +93,7 @@ class WipeTowerTests(unittest.TestCase):
             for excluded, expected in ((True, [(10, 0, 0), (20, 0, 0)]), (False, [(0, 0, 0), (10, 0, 0), (20, 0, 0)])):
                 with self.subTest(excluded=excluded):
                     self.setUp()
-                    result = bpy.ops.import_gcode.operator(directory=folder, files=[{'name': 'one.gcode'}, {'name': 'two.bgcode'}], exclude_wipe_tower=excluded)
+                    result = bpy.ops.import_gcode.operator(profile='ROUND', directory=folder, files=[{'name': 'one.gcode'}, {'name': 'two.bgcode'}], exclude_wipe_tower=excluded)
                     self.assertEqual(result, {'FINISHED'})
                     objects = [obj for obj in bpy.context.collection.objects if obj.type == 'CURVE']
                     self.assertEqual(len(objects), 2)

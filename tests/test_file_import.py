@@ -20,6 +20,13 @@ importer = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
+# Keep exact centerline/state regressions on the original representation.
+# The default printed-bead geometry is covered by test_bead_profile.py.
+from functools import partial
+importer.create_paths = partial(importer.create_paths, profile='ROUND')
+importer.import_gcode = partial(importer.import_gcode, profile='ROUND')
+
+
 TEXT = ('M83\nG0 X10\nG3 X0 Y10 I-10 E1\nT1\nG1 X-10 E1\n'
         'T0\nG0 X20\nG1 X30 E1\n')
 
@@ -52,7 +59,7 @@ class FileImportTests(unittest.TestCase):
 
     def test_binary_import_matches_text_arcs_materials_and_bevel(self):
         text = self.write('sample.gcode', TEXT.encode())
-        self.assertEqual(bpy.ops.import_gcode.operator(filepath=text), {'FINISHED'})
+        self.assertEqual(bpy.ops.import_gcode.operator(profile='ROUND', filepath=text), {'FINISHED'})
         expected = self.geometry()
         self.assertEqual(len(expected), 2)
         for obj in list(bpy.data.objects):
@@ -61,7 +68,7 @@ class FileImportTests(unittest.TestCase):
             for encoding in range(3):
                 with self.subTest(compression=compression, encoding=encoding):
                     path = self.write('sample.bgcode', binary(TEXT, compression, encoding))
-                    self.assertEqual(bpy.ops.import_gcode.operator(filepath=path), {'FINISHED'})
+                    self.assertEqual(bpy.ops.import_gcode.operator(profile='ROUND', filepath=path), {'FINISHED'})
                     self.assertEqual(self.geometry(), expected)
                     objects = [obj for obj in bpy.context.collection.objects if obj.type == 'CURVE']
                     self.assertIsNot(objects[0].data.materials[0], objects[1].data.materials[0])
@@ -71,7 +78,7 @@ class FileImportTests(unittest.TestCase):
     def test_mixed_multi_file_import(self):
         self.write('one.gcode', TEXT.encode())
         self.write('two.bgcode', binary(TEXT, 3, 2))
-        result = bpy.ops.import_gcode.operator(
+        result = bpy.ops.import_gcode.operator(profile='ROUND',
             directory=str(self.folder), files=[{'name': 'one.gcode'}, {'name': 'two.bgcode'}])
         self.assertEqual(result, {'FINISHED'})
         self.assertEqual(len(bpy.context.collection.objects), 6)
@@ -116,7 +123,7 @@ class FileImportTests(unittest.TestCase):
         self.write('bad.bgcode', binary('G1 X5 E1\nG0 X10\nG3 X100 R1 E1\n'))
         for attempt in range(2):
             with self.subTest(attempt=attempt), self.assertRaisesRegex(RuntimeError, 'bad.bgcode: Line 3:'):
-                bpy.ops.import_gcode.operator(directory=str(self.folder), files=[
+                bpy.ops.import_gcode.operator(profile='ROUND', directory=str(self.folder), files=[
                     {'name': 'one.gcode'}, {'name': 'bad.bgcode'}])
             self.assertEqual(self.snapshot(), before)
 
@@ -127,10 +134,10 @@ class FileImportTests(unittest.TestCase):
                            ('binary.gcode', b'UNKNOWN\x00'), ('text.gcode', b'\xff\xfe')):
             path = self.write(name, data)
             with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, name):
-                bpy.ops.import_gcode.operator(filepath=path)
+                bpy.ops.import_gcode.operator(profile='ROUND', filepath=path)
             self.assertEqual(self.snapshot(), before)
         with self.assertRaisesRegex(RuntimeError, 'missing.gcode'):
-            bpy.ops.import_gcode.operator(filepath=str(self.folder / 'missing.gcode'))
+            bpy.ops.import_gcode.operator(profile='ROUND', filepath=str(self.folder / 'missing.gcode'))
         self.assertEqual(self.snapshot(), before)
 
     def test_file_handler_registration_extensions_and_drop_context(self):

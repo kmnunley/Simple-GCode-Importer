@@ -18,11 +18,24 @@ TEXT = 'M83\nG0 X10\nG3 X0 Y10 I-10 E1\nT1\nG1 X-10 E1\n'
 
 
 class ReaderTests(unittest.TestCase):
-    def load(self, data, name='sample.bgcode'):
+    def load(self, data, name='sample.bgcode', **options):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / name
             path.write_bytes(data)
-            return reader.load(path)
+            return reader.load(path, **options)
+
+    def test_metadata_opt_in_preserves_original_command_line_numbers(self):
+        data = binary(TEXT) + block(b'line_width = .48\nlayer_height = .2\n', block_type=2)
+        self.assertEqual(''.join(self.load(data)), TEXT)
+        decoded = ''.join(self.load(data, include_metadata=True))
+        self.assertTrue(decoded.startswith(TEXT))
+        self.assertIn('; line_width = .48\n', decoded)
+
+    def test_metadata_encoding_and_size_limits_are_validated(self):
+        for metadata in (block(b'settings', block_type=2, encoding=7),
+                         block(b'settings', block_type=2, declared_size=2**32-1, compression=1)):
+            with self.subTest(metadata=metadata), self.assertRaises(ValueError):
+                self.load(binary(TEXT) + metadata, include_metadata=True)
 
     def test_all_compressions_encodings_and_checksums(self):
         for compression in range(4):

@@ -17,6 +17,13 @@ importer = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
+# Keep exact centerline/state regressions on the original representation.
+# The default printed-bead geometry is covered by test_bead_profile.py.
+from functools import partial
+importer.create_paths = partial(importer.create_paths, profile='ROUND')
+importer.import_gcode = partial(importer.import_gcode, profile='ROUND')
+
+
 
 class MaterialImportTests(unittest.TestCase):
     def paths(self, text):
@@ -49,6 +56,31 @@ class MaterialImportTests(unittest.TestCase):
         self.assertEqual(len(objects), 1)
         self.assertTrue(objects[0].data.materials[0].name.startswith("T0"))
         self.assert_points(objects[0], [(0, 0, 0), (10, 0, 0)])
+
+    def test_issue_15_final_path_does_not_require_retraction(self):
+        endings = {
+            "no_retraction": "",
+            "negative_extrusion": "G92 E0\nG1 E-0.0001 F300",
+            "positive_extrusion": "G92 E0\nG1 E0.0001 F300",
+        }
+        for mode in ("M82", "M83"):
+            for segments in (1, 2):
+                moves = ["G0 X0 Y0 Z0.2", "G1 X10 E1"]
+                expected = [(0, 0, .2), (10, 0, .2)]
+                if segments == 2:
+                    moves.append("G1 X20 E2" if mode == "M82" else "G1 X20 E1")
+                    expected.append((20, 0, .2))
+                for ending_name, ending in endings.items():
+                    with self.subTest(mode=mode, segments=segments, ending=ending_name):
+                        # Deliberately omit a final newline as well as any other
+                        # end-of-print commands that could flush the path.
+                        text = "\n".join([mode, *moves])
+                        if ending:
+                            text += "\n" + ending
+                        objects = self.paths(text)
+                        self.assertEqual(len(objects), 1)
+                        self.assertEqual(len(objects[0].data.splines), 1)
+                        self.assert_points(objects[0], expected)
 
     def test_repeated_selection_does_not_split_the_path(self):
         objects = self.paths("T0\nG1 X0 E1\nG1 X10 E1\nT00\nG1 X20 E1\n")
@@ -112,7 +144,7 @@ class MaterialImportTests(unittest.TestCase):
         before = set(bpy.data.objects)
         importer.register()
         try:
-            result = bpy.ops.import_gcode.operator(filepath=str(FIXTURE))
+            result = bpy.ops.import_gcode.operator(profile='ROUND', filepath=str(FIXTURE))
             self.assertEqual(result, {'FINISHED'})
             self.assertEqual(len(set(bpy.data.objects) - before), 3)
         finally:
