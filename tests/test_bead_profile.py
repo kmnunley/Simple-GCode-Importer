@@ -142,6 +142,35 @@ class BeadProfileTests(unittest.TestCase):
         self.paths(text, exclude_wipe_tower=False)
         self.assertEqual(self.dimensions(), (.45, .2))
 
+    def test_model_hints_survive_excluded_blocks_when_printing_resumes(self):
+        for block_name in ('PURGE', 'WIPE_TOWER', 'PRIME_TOWER'):
+            for excluded in (True, False):
+                for extra_comments in ('', ';TYPE:Custom\n;LAYER:-1\n'):
+                    with self.subTest(block=block_name, excluded=excluded, comments=extra_comments):
+                        self.setUp()
+                        text = HEADER + ';LAYER:0\n;TYPE:Perimeter\n;WIDTH:.5\n;HEIGHT:.25\n'
+                        text += 'G0 Z.25\nG1 X10 E1\n'
+                        text += f';{block_name}_START\n' + extra_comments
+                        text += ';WIDTH:8\n;HEIGHT:1\nG0 Z1\nG1 X200 E500\n'
+                        text += f';{block_name}_END\nG0 X10 Z.25\nG1 X110 E10\n'
+                        self.paths(text, exclude_wipe_tower=excluded)
+                        self.assertEqual(self.dimensions(), (.5, .25))
+
+    def test_nested_exclusions_do_not_release_model_hints_early(self):
+        text = HEADER + ';TYPE:Perimeter\n;WIDTH:.5\n;HEIGHT:.25\nG0 Z.25\nG1 X10 E1\n'
+        text += ';PURGE_START\n;WIDTH:8\n;HEIGHT:1\n;WIPE_TOWER_START\n'
+        text += ';PURGE_END\nG1 X500 E1000\n;WIDTH:9\n;HEIGHT:2\n'
+        text += ';WIPE_TOWER_END\nG0 X10 Z.25\nG1 X110 E10\n'
+        self.paths(text, exclude_wipe_tower=False)
+        self.assertEqual(self.dimensions(), (.5, .25))
+
+    def test_fresh_model_hints_after_excluded_block_are_used(self):
+        text = HEADER + ';LAYER:0\n;TYPE:Perimeter\n;WIDTH:.5\n;HEIGHT:.25\nG0 Z.25\nG1 X10 E1\n'
+        text += ';PURGE_START\n;TYPE:Custom\n;LAYER:-1\n;WIDTH:8\n;HEIGHT:1\nG1 X200 E500\n;PURGE_END\n'
+        text += ';WIDTH:.6\n;HEIGHT:.3\nG0 X10 Z.3\nG1 X110 E10\n'
+        self.paths(text)
+        self.assertEqual(self.dimensions(), (.6, .3))
+
     def test_retraction_recovery_does_not_inflate_width(self):
         obj, = self.paths(HEADER + ';TYPE:Perimeter\nG0 Z.2\nG1 E-1\n' + f'G1 X20 E{1+2*MODEL_E}\n')
         # The same E/distance ratio applies to the deposited fraction only.

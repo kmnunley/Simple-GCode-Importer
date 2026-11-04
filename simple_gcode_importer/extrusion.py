@@ -101,6 +101,17 @@ class ProfileEstimator:
 
     def comment(self, comment):
         marker = comment.strip().casefold()
+        # Excluded sections have their own annotations. Keep the surrounding
+        # model's hints and feature/layer context intact until all blocks end.
+        for block in ('wipe_tower', 'purge', 'prime_tower'):
+            if marker == block + '_start':
+                self.excluded_blocks.add(block)
+                return
+            if marker == block + '_end':
+                self.excluded_blocks.discard(block)
+                return
+        if self.excluded_blocks:
+            return
         role = role_marker(comment)
         if role is not None:
             was_model = self.model_role
@@ -117,11 +128,6 @@ class ProfileEstimator:
             self.excluded_role = False
         elif marker.startswith('layer:'):
             self.layer_started = False
-        for block in ('wipe_tower', 'purge', 'prime_tower'):
-            if marker == block + '_start':
-                self.excluded_blocks.add(block)
-            elif marker == block + '_end':
-                self.excluded_blocks.discard(block)
         for tag, attribute in (('width:', 'local_width'), ('height:', 'local_height'),
                                ('line_width:', 'local_width'), ('layer_height:', 'local_height')):
             if marker.startswith(tag):
