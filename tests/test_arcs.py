@@ -19,6 +19,13 @@ importer = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = importer
 spec.loader.exec_module(importer)
 
+# Keep exact centerline/state regressions on the original representation.
+# The default printed-bead geometry is covered by test_bead_profile.py.
+from functools import partial
+importer.create_paths = partial(importer.create_paths, profile='ROUND')
+importer.import_gcode = partial(importer.import_gcode, profile='ROUND')
+
+
 
 class ArcImportTests(unittest.TestCase):
     def setUp(self):
@@ -147,7 +154,7 @@ class ArcImportTests(unittest.TestCase):
     def test_visual_fixture_imports_through_registered_operator(self):
         importer.register()
         try:
-            result = bpy.ops.import_gcode.operator(
+            result = bpy.ops.import_gcode.operator(profile='ROUND',
                 filepath=str(ROOT / "tests" / "fixtures" / "xy_arcs.gcode"))
             self.assertEqual(result, {'FINISHED'})
             objects = [obj for obj in bpy.context.collection.objects if obj.type == 'CURVE']
@@ -229,7 +236,7 @@ class ArcImportTests(unittest.TestCase):
             with patch("builtins.open", return_value=io.BytesIO(text.encode("utf-8"))):
                 # Blender exposes ERROR reports from CANCELLED operators as RuntimeError.
                 with self.assertRaisesRegex(RuntimeError, "Line 3:"):
-                    bpy.ops.import_gcode.operator(filepath="failed-import.gcode")
+                    bpy.ops.import_gcode.operator(profile='ROUND', filepath="failed-import.gcode")
             for name, original in before.items():
                 self.assertEqual(set(getattr(bpy.data, name)), original)
         finally:

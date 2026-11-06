@@ -18,12 +18,12 @@ MAX_BLOCK_SIZE = 64 * 1024 * 1024
 _BGCODE_MAGIC = b"GCDE"
 
 
-def load(path):
+def load(path, *, include_metadata=False):
     """Return source lines, auto-detecting binary magic rather than extension."""
     with open(path, "rb") as stream:
         data = stream.read()
     if data.startswith(_BGCODE_MAGIC):
-        text = _load_bgcode(data)
+        text = _load_bgcode(data, include_metadata=include_metadata)
     else:
         if b"\x00" in data:
             raise ValueError("Unrecognized binary file; expected Prusa BGCode (GCDE)")
@@ -54,7 +54,7 @@ def _decompress(payload, compression, size):
     return result
 
 
-def _load_bgcode(data):
+def _load_bgcode(data, *, include_metadata=False):
     if len(data) < 10:
         raise ValueError("Truncated BGCode file header")
     version, checksum = struct.unpack_from("<IH", data, 4)
@@ -65,6 +65,7 @@ def _load_bgcode(data):
     checksum_size = 4 if checksum else 0
     position = 10
     parts = []
+    metadata = []
     while position < len(data):
         start = position
         if position + 8 > len(data):
@@ -98,11 +99,21 @@ def _load_bgcode(data):
                 raise ValueError(f"Unsupported G-code encoding {encoding}")
             raw = _decompress(data[payload_start:payload_end], compression, size)
             parts.append(raw.decode("utf-8") if encoding == 0 else _meatpack_decode(raw))
-        # Metadata and thumbnails do not affect paths; skip without decoding.
+        elif include_metadata and block_type in (2, 3, 4):
+            encoding, = struct.unpack_from('<H', data, position)
+            if encoding != 0:
+                raise ValueError(f'Unsupported metadata encoding {encoding}')
+            raw = _decompress(data[payload_start:payload_end], compression, size)
+            metadata.extend('; ' + line + '\n' for line in raw.decode('utf-8').splitlines())
+        # Thumbnails are never decoded. Metadata is appended as comments so
+        # source commands retain their original line numbers.
         position = block_end
     if not parts:
         raise ValueError("No G-code blocks found in BGCode file")
-    return "".join(parts)
+    text = ''.join(parts)
+    if metadata:
+        text += ('\n' if not text.endswith('\n') else '') + ''.join(metadata)
+    return text
 
 
 def _heatshrink_decompress(
