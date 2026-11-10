@@ -1,6 +1,7 @@
 import bpy
 import os
 import math
+from array import array
 from contextlib import contextmanager
 
 from bpy.props import BoolProperty, StringProperty, CollectionProperty, EnumProperty, FloatProperty
@@ -86,7 +87,7 @@ def arc_points(start, end, coord, clockwise, *, with_length=False):
     return points
 
 
-def build_bead_paths(paths_by_tool, created_data, name, profile):
+def build_bead_paths(paths_by_tool, created_data, name, profile, *, consume_paths=False):
     """One native curve per tool, all using the same flattened profile."""
     if not paths_by_tool:
         return
@@ -103,44 +104,84 @@ def build_bead_paths(paths_by_tool, created_data, name, profile):
 
     def nose(point, direction):
         tangent = direction.normalized()
-        return [(point + tangent * profile.width / 2 * math.sin(i * math.pi / 10),
-                 0 if i == 5 else math.cos(i * math.pi / 10)) for i in range(1, 6)]
+        # One shoulder at 45 degrees plus a zero-radius tip per end. Keep the
+        # rounded taper editable without five extra stations at each endpoint.
+        return [(point + tangent * profile.width / 2 * math.sin(i * math.pi / 4),
+                 0 if i == 2 else math.cos(i * math.pi / 4)) for i in (1, 2)]
 
+    z_offset = Vector((0, 0, profile.height / 2)).z
     for tool, paths in paths_by_tool.items():
         data = bpy.data.curves.new(tool, 'CURVE')
         created_data['curves'].append(data)
         data.dimensions = '3D'
         data.twist_mode = 'Z_UP'
-        data.resolution_u = 1
+        data.resolution_u = 2
+        data.render_resolution_u = 5
         data.bevel_depth = profile.height / 2
         data.extrude = (profile.width - profile.height) / 2
-        data.bevel_resolution = 3
+        data.bevel_resolution = 1
         data.use_fill_caps = False
         material = bpy.data.materials.new(tool)
         created_data['materials'].append(material)
         data.materials.append(material)
         obj = bpy.data.objects.new(tool, data)
         created_data['objects'].append(obj)
-        bpy.context.collection.objects.link(obj)
         obj.parent = root
-        for points in paths:
-            centers = [Vector(p) - Vector((0, 0, profile.height / 2)) for p in points]
-            closed = (centers[0] - centers[-1]).length < 1e-6
+        for path_index, points in enumerate(paths):
+            # Match Blender's float32 coordinates without retaining a Python
+            # Vector and station tuple for every point in the current path.
+            coords = (array('f', points) if isinstance(points, array) else
+                      array('f', (value for point in points for value in point)))
+            for offset in range(2, len(coords), 3):
+                coords[offset] -= z_offset
+            first, last = Vector(coords[:3]), Vector(coords[-3:])
+            closed = (first - last).length < 1e-6
             if closed:
-                stations = [(p, 1) for p in centers[:-1]]
+                del coords[-3:]
+                radii = array('f', [1]) * (len(coords) // 3)
             else:
-                stations = list(reversed(nose(centers[0], centers[0]-centers[1])))
-                stations += [(p, 1) for p in centers]
-                stations += nose(centers[-1], centers[-1]-centers[-2])
+                start_cap = list(reversed(nose(first, first - Vector(coords[3:6]))))
+                end_cap = nose(last, last - Vector(coords[-6:-3]))
+                coords = (array('f', (value for co, radius in start_cap for value in co)) +
+                          coords + array('f', (value for co, radius in end_cap for value in co)))
+                radii = array('f', [1]) * (len(coords) // 3)
+                radii[:2] = array('f', (radius for co, radius in start_cap))
+                radii[-2:] = array('f', (radius for co, radius in end_cap))
+            point_count = len(radii)
             spline = data.splines.new('BEZIER')
-            spline.bezier_points.add(len(stations)-1)
+            spline.bezier_points.add(point_count-1)
             spline.use_cyclic_u = closed
-            for point, (co, radius) in zip(spline.bezier_points, stations):
-                point.co = point.handle_left = point.handle_right = co
-                point.radius = radius
-                # Native extrusion extends along the profile's vertical axis;
-                # rotate it sideways to keep the bead wide and vertically thin.
-                point.tilt = math.pi / 2
+            if closed:
+                left_handles = right_handles = coords
+            else:
+                left_handles = array('f', coords)
+                right_handles = array('f', coords)
+                # Radius interpolates along the segment parameter. Linear cap
+                # handles keep position in step with radius at Render U > 2;
+                # collapsed handles otherwise introduce bulges between stations.
+                for edge in (0, 1, point_count-3, point_count-2):
+                    for axis in range(3):
+                        start, end = coords[3*edge + axis], coords[3*(edge+1) + axis]
+                        delta = (end - start) / 3
+                        right_handles[3*edge + axis] = start + delta
+                        left_handles[3*(edge+1) + axis] = end - delta
+            # Native extrusion extends along the profile's vertical axis;
+            # rotate it sideways to keep the bead wide and vertically thin.
+            tilts = array('f', [math.pi / 2]) * point_count
+            bezier_points = spline.bezier_points
+            # Set coordinates before handles: moving coordinates moves handles.
+            bezier_points.foreach_set('co', coords)
+            bezier_points.foreach_set('handle_left', left_handles)
+            bezier_points.foreach_set('handle_right', right_handles)
+            bezier_points.foreach_set('radius', radii)
+            bezier_points.foreach_set('tilt', tilts)
+            if consume_paths:
+                paths[path_index] = None
+            del points, coords, left_handles, right_handles, radii, tilts
+        if consume_paths:
+            paths.clear()
+        # Link only after all the object's splines have been populated.
+        bpy.context.collection.objects.link(obj)
 
 
 @contextmanager
@@ -161,16 +202,18 @@ def create_paths(gcode_lines, *, exclude_wipe_tower=True, profile='BEAD',
                  filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     """Create paths atomically, rolling back this import's data on failure."""
     with import_transaction() as created_data:
-        return _create_paths(gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower,
+        return _create_paths(lambda: gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower,
                              profile=profile, filament_diameter=filament_diameter,
                              layer_height=layer_height, extrusion_width=extrusion_width)
 
 
-def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
+def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
                   profile='BEAD', filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     if profile not in ('BEAD', 'ROUND'):
         raise ValueError('Unknown extrusion profile')
-    gcode_lines = list(gcode_lines)
+    gcode_lines = read_lines()
+    if not isinstance(gcode_lines, list):
+        gcode_lines = list(gcode_lines)
     estimator = ProfileEstimator(gcode_lines, filament_diameter, layer_height, extrusion_width)
     bead_paths = {}
     # Initialize the toolhead position and extruder temperature
@@ -185,7 +228,7 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
     max_e = 0
     point_data = []
     current_tool = "T0"
-    tool_curves = {}
+    tool_objects = {}
     root = None
     extruder_positions = {}
     tower_role = False
@@ -197,7 +240,10 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
             return
 
         if profile == 'BEAD':
-            bead_paths.setdefault(current_tool, []).append(points[:])
+            # Retain full parser precision in a compact buffer (24 bytes/XYZ),
+            # not a list of Python coordinate tuples and float objects.
+            bead_paths.setdefault(current_tool, []).append(
+                array('d', (value for point in points for value in point)))
             return
 
         if root is None:
@@ -206,10 +252,13 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
             root.empty_display_type = 'PLAIN_AXES'
             bpy.context.collection.objects.link(root)
 
-        if current_tool not in tool_curves:
+        if current_tool not in tool_objects:
             curve_data = bpy.data.curves.new(current_tool, type='CURVE')
             created_data["curves"].append(curve_data)
             curve_data.dimensions = '3D'
+            curve_data.resolution_u = 2
+            curve_data.render_resolution_u = 5
+            curve_data.bevel_resolution = 1
             curve_data.use_fill_caps = True
             curve_data.bevel_depth = 0.2
             material = bpy.data.materials.new(current_tool)
@@ -218,18 +267,15 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
 
             curve_object = bpy.data.objects.new(current_tool, curve_data)
             created_data["objects"].append(curve_object)
-            bpy.context.collection.objects.link(curve_object)
             curve_object.parent = root
-            tool_curves[current_tool] = curve_data
+            tool_objects[current_tool] = curve_object
 
-        curve_data = tool_curves[current_tool]
-
+        curve_data = tool_objects[current_tool].data
         curve_spline = curve_data.splines.new('BEZIER')
         curve_spline.bezier_points.add(len(points) - 1)
-        for bezier_point, point in zip(curve_spline.bezier_points, points):
-            bezier_point.co = point
-            bezier_point.handle_left = point
-            bezier_point.handle_right = point
+        coords = array('f', (value for point in points for value in point))
+        for attribute in ('co', 'handle_left', 'handle_right'):
+            curve_spline.bezier_points.foreach_set(attribute, coords)
 
     def get_params(params):
         coord = {}
@@ -323,7 +369,6 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
                 else:
                     e = e + coord["E"]
 
-
             if command in ("G2", "G3"):
                 try:
                     points, length = arc_points(start_pos, toolhead_pos, coord,
@@ -388,9 +433,15 @@ def _create_paths(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower
                 max_e = e
 
     dump_curve(point_data)
+    point_data = []
+    # Release decoded source before building printed beads or linking curves.
+    # Caller-owned lists passed to create_paths are never mutated.
+    del gcode_lines
+    for obj in tool_objects.values():
+        bpy.context.collection.objects.link(obj)
     if profile == 'BEAD' and bead_paths:
         bead_profile = estimator.result()
-        build_bead_paths(bead_paths, created_data, name, bead_profile)
+        build_bead_paths(bead_paths, created_data, name, bead_profile, consume_paths=True)
         return list(bead_profile.assumptions)
     return []
 
@@ -404,7 +455,7 @@ def import_gcodes(filepaths, **options):
     with import_transaction() as created_data:
         for filepath in filepaths:
             try:
-                assumptions.update(_create_paths(load(filepath, include_metadata=True), created_data,
+                assumptions.update(_create_paths(lambda: load(filepath, include_metadata=True), created_data,
                               name=os.path.splitext(os.path.basename(filepath))[0],
                               **options))
             except (OSError, ValueError) as error:
@@ -430,7 +481,6 @@ class ImportGCodeOperator(Operator, ImportHelper):
     filament_diameter: FloatProperty(name='Fallback filament diameter (mm)', default=1.75, min=.01)
     layer_height: FloatProperty(name='Fallback layer height (mm)', default=.2, min=.001)
     extrusion_width: FloatProperty(name='Fallback bead width (mm)', default=.45, min=.001)
-
     exclude_wipe_tower: BoolProperty(
         name="Exclude wipe/prime tower (PrusaSlicer and OrcaSlicer only)",
         description="Skip paths marked as wipe/prime tower by PrusaSlicer or OrcaSlicer; "

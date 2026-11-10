@@ -18,6 +18,23 @@ tapered extensions, ending at zero-radius poles rather than flat disks.
 These extensions remain editable in the curve and extend half a bead width
 beyond each endpoint. Continuous closed paths have no end caps.
 
+Each open end uses two added control points: a rounded shoulder and a zero-radius
+tip. Imported curves use Bevel Resolution 1, Resolution Preview U 2 and Render U 5
+in both profile modes. These defaults can be edited in Object Data Properties;
+they are not import options. Compared with the previous defaults (bevel 3,
+preview 1), short disconnected strokes use fewer polygons, while the higher
+preview resolution can increase polygon counts on long or closed paths.
+
+### Temporary import memory
+
+Parsed bead paths are retained in packed double-precision XYZ buffers until
+construction. File imports release decoded source lines before building curves,
+and discard each path buffer after writing its spline. Construction uses packed
+float32 buffers directly rather than per-point Python Vectors and station tuples.
+Parser precision and the resulting editable geometry are preserved. These changes
+reduce temporary import allocations; they do not reduce the completed curve's
+control-point count or the size of Blender's evaluated beveled surface.
+
 ### Choosing the single profile without using startup purge lines
 
 The estimator samples only recognized model feature sections (such as

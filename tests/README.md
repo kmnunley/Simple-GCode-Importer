@@ -36,6 +36,7 @@ python -m unittest discover -s tests -p test_bgcode_reader.py
 | `test_materials.py` | Per-tool curves and materials, bevel, disconnected splines, and extrusion state |
 | `test_wipe_tower.py` | Default-on import option, PrusaSlicer/OrcaSlicer markers, excluded geometry and preserved state, text/BGCode batches, and rollback |
 | `test_file_import.py` | File root hierarchy, independent imports, parent transforms, registered operators, mixed batches, rollback, and drop-handler routing |
+| `test_import_memory.py` | Compact coordinate precision, matching raw geometry, source-line release, incremental path disposal and caller-owned data preservation |
 | `bgcode_fixtures.py` | Independent binary encoders shared by reader and import tests |
 | `fixtures/` | Small text G-code samples for material and arc imports |
 

@@ -17,6 +17,10 @@ Each file is grouped under its filename in the Outliner, with a curve for each t
 
 By default, every tool in a file uses one shared printed-bead profile: a flat top and bottom, rounded sides, and rounded path ends. The importer estimates a representative width and height from model extrusion sections, excluding startup purge lines. It keeps the same profile across layers, features, and tools, with no extra profile objects or geometry groups.
 
+Rounded ends use two extra control points per end. Imported curves start with
+Bevel Resolution **1**, Resolution Preview U **2**, and Render U **5**. Adjust these
+after import in Object Data Properties; they are not exposed as import options.
+
 The importer supports text G-code, Prusa binary BGCode, and XY arcs, including helical moves. Only paths that deposit filament are imported. See the [import format reference](docs/import-format.md) for detailed compatibility and limitations.
 
 ### Import options
