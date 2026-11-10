@@ -13,6 +13,10 @@ To install the plugin, add it to Blender from the [Extension website](https://ex
 ## Usage
 In Blender 4.2 or newer, go to File > Import > GCode (.gcode, .bgcode), select one or more files, and click Import GCode/BGCode. You can also drag supported files into the 3D Viewport or Outliner and confirm the import.
 
+During interactive imports, Blender’s status bar shows the current stage and
+approximate progress. Press Escape to cancel and remove the current import batch.
+After a successful import, the status bar shows the elapsed time for five seconds.
+
 Each file is grouped under its filename in the Outliner, with a curve for each tool (`T0`, `T1`, and so on). Select the parent Empty to move, rotate, or scale the whole import. Select a tool's curve to change thickness or material for all its paths, or enter Edit Mode to edit individual paths.
 
 By default, every tool in a file uses one shared printed-bead profile: a flat top and bottom, rounded sides, and rounded path ends. The importer estimates a representative width and height from model extrusion sections, excluding startup purge lines. It keeps the same profile across layers, features, and tools, with no extra profile objects or geometry groups.

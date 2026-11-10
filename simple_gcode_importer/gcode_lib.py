@@ -20,10 +20,30 @@ _BGCODE_MAGIC = b"GCDE"
 
 def load(path, *, include_metadata=False):
     """Return source lines, auto-detecting binary magic rather than extension."""
+    steps = load_steps(path, include_metadata=include_metadata)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
+def load_steps(path, *, include_metadata=False):
+    """Yield BGCode decode progress, then return the same lines as load()."""
     with open(path, "rb") as stream:
         data = stream.read()
     if data.startswith(_BGCODE_MAGIC):
-        text = _load_bgcode(data, include_metadata=include_metadata)
+        parts, metadata = [], []
+        for block_type, text, offset in _iter_bgcode_parts(data, include_metadata=include_metadata):
+            if block_type == 1:
+                parts.append(text)
+            else:
+                metadata.extend('; ' + line + '\n' for line in text.splitlines())
+            yield offset / len(data)
+        text = ''.join(parts)
+        parts.clear()
+        if metadata:
+            text += ('\n' if not text.endswith('\n') else '') + ''.join(metadata)
     else:
         if b"\x00" in data:
             raise ValueError("Unrecognized binary file; expected Prusa BGCode (GCDE)")
@@ -54,7 +74,7 @@ def _decompress(payload, compression, size):
     return result
 
 
-def _load_bgcode(data, *, include_metadata=False):
+def _iter_bgcode_parts(data, *, include_metadata=False):
     if len(data) < 10:
         raise ValueError("Truncated BGCode file header")
     version, checksum = struct.unpack_from("<IH", data, 4)
@@ -64,8 +84,7 @@ def _load_bgcode(data, *, include_metadata=False):
         raise ValueError(f"Unsupported BGCode checksum type {checksum}")
     checksum_size = 4 if checksum else 0
     position = 10
-    parts = []
-    metadata = []
+    found_gcode = False
     while position < len(data):
         start = position
         if position + 8 > len(data):
@@ -91,29 +110,27 @@ def _load_bgcode(data, *, include_metadata=False):
             raise ValueError(f"Truncated block payload at offset {start}")
         if checksum:
             stored, = struct.unpack_from("<I", data, payload_end)
-            if zlib.crc32(data[start:payload_end]) != stored:
+            if zlib.crc32(memoryview(data)[start:payload_end]) != stored:
                 raise ValueError(f"CRC32 mismatch at offset {start}")
         if block_type == 1:
             encoding, = struct.unpack_from("<H", data, position)
             if encoding not in (0, 1, 2):
                 raise ValueError(f"Unsupported G-code encoding {encoding}")
             raw = _decompress(data[payload_start:payload_end], compression, size)
-            parts.append(raw.decode("utf-8") if encoding == 0 else _meatpack_decode(raw))
+            found_gcode = True
+            text = raw.decode("utf-8") if encoding == 0 else _meatpack_decode(raw)
+            yield block_type, text, block_end
         elif include_metadata and block_type in (2, 3, 4):
             encoding, = struct.unpack_from('<H', data, position)
             if encoding != 0:
                 raise ValueError(f'Unsupported metadata encoding {encoding}')
             raw = _decompress(data[payload_start:payload_end], compression, size)
-            metadata.extend('; ' + line + '\n' for line in raw.decode('utf-8').splitlines())
+            yield block_type, raw.decode('utf-8'), block_end
         # Thumbnails are never decoded. Metadata is appended as comments so
         # source commands retain their original line numbers.
         position = block_end
-    if not parts:
+    if not found_gcode:
         raise ValueError("No G-code blocks found in BGCode file")
-    text = ''.join(parts)
-    if metadata:
-        text += ('\n' if not text.endswith('\n') else '') + ''.join(metadata)
-    return text
 
 
 def _heatshrink_decompress(

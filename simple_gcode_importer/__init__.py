@@ -1,14 +1,15 @@
 import bpy
 import os
 import math
+import time
 from array import array
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 
 from bpy.props import BoolProperty, StringProperty, CollectionProperty, EnumProperty, FloatProperty
 from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
 from bpy.types import Operator, OperatorFileListElement, FileHandler
 
-from .gcode_lib import load
+from .gcode_lib import load, load_steps
 from .extrusion import INFILL_ROLES, SUPPORT_ROLES, ProfileEstimator, role_marker
 
 
@@ -87,7 +88,20 @@ def arc_points(start, end, coord, clockwise, *, with_length=False):
     return points
 
 
+def _finish_steps(steps):
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
 def build_bead_paths(paths_by_tool, created_data, name, profile, *, consume_paths=False):
+    return _finish_steps(_build_bead_paths_steps(
+        paths_by_tool, created_data, name, profile, consume_paths=consume_paths))
+
+
+def _build_bead_paths_steps(paths_by_tool, created_data, name, profile, *, consume_paths=False):
     """One native curve per tool, all using the same flattened profile."""
     if not paths_by_tool:
         return
@@ -110,6 +124,8 @@ def build_bead_paths(paths_by_tool, created_data, name, profile, *, consume_path
                  0 if i == 2 else math.cos(i * math.pi / 4)) for i in (1, 2)]
 
     z_offset = Vector((0, 0, profile.height / 2)).z
+    total = sum(len(paths) for paths in paths_by_tool.values())
+    completed = 0
     for tool, paths in paths_by_tool.items():
         data = bpy.data.curves.new(tool, 'CURVE')
         created_data['curves'].append(data)
@@ -128,6 +144,8 @@ def build_bead_paths(paths_by_tool, created_data, name, profile, *, consume_path
         created_data['objects'].append(obj)
         obj.parent = root
         for path_index, points in enumerate(paths):
+            if completed % 128 == 0:
+                yield completed / total
             # Match Blender's float32 coordinates without retaining a Python
             # Vector and station tuple for every point in the current path.
             coords = (array('f', points) if isinstance(points, array) else
@@ -178,6 +196,7 @@ def build_bead_paths(paths_by_tool, created_data, name, profile, *, consume_path
             if consume_paths:
                 paths[path_index] = None
             del points, coords, left_handles, right_handles, radii, tilts
+            completed += 1
         if consume_paths:
             paths.clear()
         # Link only after all the object's splines have been populated.
@@ -190,7 +209,7 @@ def import_transaction():
     created_data = {name: [] for name in ("objects", "curves", "materials")}
     try:
         yield created_data
-    except Exception:
+    except (Exception, GeneratorExit):
         # Remove users before their data, preserving all pre-existing scene data.
         for name, blocks in created_data.items():
             for block in reversed(blocks):
@@ -203,20 +222,21 @@ def create_paths(gcode_lines, *, exclude_wipe_tower=True, exclude_infill=False,
                  filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     """Create paths atomically, rolling back this import's data on failure."""
     with import_transaction() as created_data:
-        return _create_paths(lambda: gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower,
-                             exclude_infill=exclude_infill, exclude_supports=exclude_supports,
-                             profile=profile, filament_diameter=filament_diameter,
-                             layer_height=layer_height, extrusion_width=extrusion_width)
+        return _finish_steps(_create_paths_steps(
+            gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower,
+            exclude_infill=exclude_infill, exclude_supports=exclude_supports,
+            profile=profile, filament_diameter=filament_diameter,
+            layer_height=layer_height, extrusion_width=extrusion_width))
 
 
-def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
-                  exclude_infill=False, exclude_supports=False,
-                  profile='BEAD', filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
+def _create_paths_steps(gcode_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
+                        exclude_infill=False, exclude_supports=False,
+                        profile='BEAD', filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     if profile not in ('BEAD', 'ROUND', 'NONE'):
         raise ValueError('Unknown extrusion profile')
-    gcode_lines = read_lines()
     if not isinstance(gcode_lines, list):
         gcode_lines = list(gcode_lines)
+    yield .55, 'Preparing paths'
     estimator = (ProfileEstimator(gcode_lines, filament_diameter, layer_height, extrusion_width)
                  if profile != 'NONE' else None)
     bead_paths = {}
@@ -325,6 +345,9 @@ def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=
 
     # Iterate through the gcode instructions
     for line_number, line in enumerate(gcode_lines, 1):
+        if (line_number - 1) % 2048 == 0:
+            span = .17 if profile == 'BEAD' else .42
+            yield .56 + span * (line_number - 1) / len(gcode_lines), 'Parsing G-code'
         code, separator, comment = line.partition(";")
         if separator and (exclude_infill or exclude_supports):
             role = role_marker(comment)
@@ -462,7 +485,9 @@ def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=
         bpy.context.collection.objects.link(obj)
     if profile == 'BEAD' and bead_paths:
         bead_profile = estimator.result()
-        build_bead_paths(bead_paths, created_data, name, bead_profile, consume_paths=True)
+        for fraction in _build_bead_paths_steps(
+                bead_paths, created_data, name, bead_profile, consume_paths=True):
+            yield .73 + .25 * fraction, 'Building curves'
         return list(bead_profile.assumptions)
     return []
 
@@ -472,16 +497,112 @@ def import_gcode(filepath, **options):
 
 
 def import_gcodes(filepaths, **options):
+    return _finish_steps(_import_gcodes_steps(filepaths, **options))
+
+
+def _import_gcodes_steps(filepaths, *, interactive=False, **options):
+    filepaths = list(filepaths)
     assumptions = set()
     with import_transaction() as created_data:
-        for filepath in filepaths:
+        for index, filepath in enumerate(filepaths):
+            filename = os.path.basename(filepath)
+            label = f'{index + 1}/{len(filepaths)}: {filename}'
             try:
-                assumptions.update(_create_paths(lambda: load(filepath, include_metadata=True), created_data,
-                              name=os.path.splitext(os.path.basename(filepath))[0],
-                              **options))
+                yield index / len(filepaths), f'Reading {label}'
+                if interactive:
+                    with closing(load_steps(filepath, include_metadata=True)) as reader:
+                        while True:
+                            try:
+                                decoded = next(reader)
+                            except StopIteration as done:
+                                lines = done.value
+                                del done
+                                break
+                            yield (index + .54 * decoded) / len(filepaths), f'Reading {label}'
+                else:
+                    lines = load(filepath, include_metadata=True)
+                steps = _create_paths_steps(
+                    lines, created_data, name=os.path.splitext(filename)[0], **options)
+                del lines
+                with closing(steps):
+                    while True:
+                        try:
+                            fraction, stage = next(steps)
+                        except StopIteration as done:
+                            assumptions.update(done.value)
+                            break
+                        yield (index + fraction) / len(filepaths), f'{stage} — {label}'
             except (OSError, ValueError) as error:
-                raise ValueError(f"{os.path.basename(filepath)}: {error}") from error
+                raise ValueError(f"{filename}: {error}") from error
+        if interactive:
+            yield .99, 'Finalizing import'
+            bpy.context.view_layer.update()
     return sorted(assumptions)
+
+
+_active_import = None
+
+
+class _ImportStatus:
+    """Own the status display from import start until the completion message expires."""
+
+    def __init__(self):
+        self.workspace = None
+        self.draw = None
+        self.previous_draw = None
+        self.message = None
+        self.expire = self._expire
+
+    def start(self, workspace):
+        self.clear()
+        self.workspace = workspace
+        previous_draw = self.previous_draw = bpy.types.STATUSBAR_HT_header.draw
+
+        def draw(header, context):
+            if self.draw is draw and context.workspace == workspace:
+                if self.message is not None:
+                    header.layout.label(text=self.message)
+                elif _active_import is not None:
+                    row = header.layout.row()
+                    row.ui_units_x = 24
+                    row.progress(factor=_active_import._progress,
+                                 text=f'{_active_import._progress:.0%} · {_active_import._stage}')
+                    header.layout.label(text='Esc to cancel G-code import')
+            previous_draw(header, context)
+
+        self.draw = draw
+        workspace.status_text_set(draw)
+
+    def redraw(self):
+        # The public text setter can restore Blender's cached header draw
+        # function. Use its redraw notifier without replacing our callback.
+        self.workspace.status_text_set_internal(None)
+
+    def complete(self, elapsed):
+        minutes, seconds = divmod(elapsed, 60)
+        duration = f'{int(minutes)}m {seconds:.1f}s' if minutes else f'{seconds:.1f}s'
+        self.message = f'G-code import complete — {duration}'
+        self.redraw()
+        bpy.app.timers.register(self.expire, first_interval=5.0)
+
+    def clear(self):
+        if bpy.app.timers.is_registered(self.expire):
+            bpy.app.timers.unregister(self.expire)
+        self._expire()
+
+    def _expire(self):
+        header = bpy.types.STATUSBAR_HT_header
+        if self.draw is not None and header.draw is self.draw:
+            # Restore the actual prior callback, including other add-ons.
+            header.draw = self.previous_draw
+            try:
+                self.redraw()
+            except ReferenceError:
+                pass  # The workspace may have been removed.
+        self.workspace = self.draw = self.previous_draw = self.message = None
+
+
+_import_status = _ImportStatus()
 
 
 class ImportGCodeOperator(Operator, ImportHelper):
@@ -534,25 +655,91 @@ class ImportGCodeOperator(Operator, ImportHelper):
         column.prop(self, 'exclude_infill')
         column.prop(self, 'exclude_supports')
 
+    def import_paths(self):
+        return ([os.path.join(self.directory, item.name) for item in self.files]
+                if self.files else [self.filepath])
+
     def invoke(self, context, event):
         # A drop supplies the path already; show confirmation instead of reopening
         # the file browser. Menu imports still open the normal file selector.
         return self.invoke_popup(context)
 
-    def execute(self, context):
-        filepaths = ([os.path.join(self.directory, item.name) for item in self.files]
-                     if self.files else [self.filepath])
+    def cancel(self, context):
+        if _active_import is self:
+            self._stop_import(context)
+
+    def _stop_import(self, context, *, completed=False):
+        global _active_import
         try:
-            assumptions = import_gcodes(filepaths, exclude_wipe_tower=self.exclude_wipe_tower,
-                exclude_infill=self.exclude_infill,
-                exclude_supports=self.exclude_supports, profile=self.profile, filament_diameter=self.filament_diameter,
-                layer_height=self.layer_height, extrusion_width=self.extrusion_width)
-            if assumptions:
-                self.report({'WARNING'}, 'Bead profile used: ' + ', '.join(assumptions))
+            self._import_steps.close()
+        finally:
+            _active_import = None
+            if self._import_timer is not None:
+                context.window_manager.event_timer_remove(self._import_timer)
+                self._import_timer = None
+            if completed:
+                _import_status.complete(time.perf_counter() - self._import_started)
+            else:
+                _import_status.clear()
+
+    def execute(self, context):
+        global _active_import
+        if _active_import is not None:
+            self.report({'WARNING'}, 'A G-code import is already running')
+            return {'CANCELLED'}
+        filepaths = self.import_paths()
+        options = dict(exclude_wipe_tower=self.exclude_wipe_tower,
+            exclude_infill=self.exclude_infill, exclude_supports=self.exclude_supports,
+            profile=self.profile, filament_diameter=self.filament_diameter,
+            layer_height=self.layer_height, extrusion_width=self.extrusion_width)
+        if self.options.is_invoke and not bpy.app.background and context.window:
+            self._import_steps = _import_gcodes_steps(filepaths, interactive=True, **options)
+            self._import_timer = None
+            self._import_started = time.perf_counter()
+            self._progress, self._stage = 0, 'Starting G-code import'
+            _active_import = self
+            try:
+                self._import_timer = context.window_manager.event_timer_add(.03, window=context.window)
+                context.window_manager.modal_handler_add(self)
+                _import_status.start(context.workspace)
+            except Exception:
+                self.cancel(context)
+                raise
+            return {'RUNNING_MODAL'}
+        try:
+            self._report_assumptions(import_gcodes(filepaths, **options))
         except (OSError, ValueError) as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
         return {'FINISHED'}
+
+    def _report_assumptions(self, assumptions):
+        if assumptions:
+            self.report({'WARNING'}, 'Bead profile used: ' + ', '.join(assumptions))
+
+    def modal(self, context, event):
+        if event.type == 'ESC':
+            self.cancel(context)
+            return {'CANCELLED'}
+        if event.type != 'TIMER':
+            return {'RUNNING_MODAL'}
+        try:
+            deadline = time.perf_counter() + .02
+            while True:
+                previous_stage = self._stage
+                self._progress, self._stage = next(self._import_steps)
+                if self._stage != previous_stage or time.perf_counter() >= deadline:
+                    break
+        except StopIteration as done:
+            self._stop_import(context, completed=True)
+            self._report_assumptions(done.value)
+            return {'FINISHED'}
+        except Exception as error:
+            self.cancel(context)
+            self.report({'ERROR'}, str(error))
+            return {'CANCELLED'}
+        _import_status.redraw()
+        return {'RUNNING_MODAL'}
 
 
 class GCODE_FH_import(FileHandler):
@@ -580,6 +767,9 @@ def register():
 
 @bpy.app.handlers.persistent
 def unregister():
+    if _active_import is not None:
+        _active_import.cancel(bpy.context)
+    _import_status.clear()
     # Remove the operator from the File > Import menu
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
     # Unregister the operators (in reverse order to avoid dependency issues)

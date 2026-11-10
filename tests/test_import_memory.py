@@ -65,8 +65,9 @@ class ImportMemoryTests(unittest.TestCase):
             self.assertEqual(tuple(path), (1.234567891,0,.2,2.345678912,0,.2))
             self.assertTrue(options['consume_paths'])
             checked.append(True)
+            return iter(())
         with (patch.object(importer, 'load', load_lines),
-              patch.object(importer, 'build_bead_paths', inspect_paths)):
+              patch.object(importer, '_build_bead_paths_steps', inspect_paths)):
             importer.import_gcode('sample.gcode')
         self.assertEqual(checked, [True])
 

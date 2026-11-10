@@ -83,14 +83,14 @@ class FeatureExclusionTests(unittest.TestCase):
         self.assertEqual(self.coordinates(obj), [[(0, 10, 0), (10, 10, 0)]])
 
     def test_excluded_sections_do_not_enter_bead_paths_or_profile_estimates(self):
-        original = importer.build_bead_paths
+        original = importer._build_bead_paths_steps
         captured = {}
         def capture(paths, created, name, profile, **options):
             captured.update(paths={tool: [[tuple(path[i:i+3]) for i in range(0, len(path), 3)]
                                           for path in tool_paths]
                                    for tool, tool_paths in paths.items()}, profile=profile)
-            original(paths, created, name, profile, **options)
-        with patch.object(importer, 'build_bead_paths', capture):
+            yield from original(paths, created, name, profile, **options)
+        with patch.object(importer, '_build_bead_paths_steps', capture):
             importer.create_paths(['M83', ';LAYER:0', ';TYPE:Perimeter', ';WIDTH:.45',
                 ';HEIGHT:.2', 'G0 Z.2', 'G1 X10 E1', ';TYPE:Sparse infill', ';WIDTH:8',
                 'G1 X100 E100', ';TYPE:Support', 'G1 X200 E100'],
