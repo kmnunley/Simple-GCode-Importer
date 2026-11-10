@@ -4,7 +4,7 @@ Detailed format support and filtering behavior for troubleshooting G-code import
 
 ## Shared printed-bead profile
 
-**Printed bead** uses one width and height for every printing operation in a
+**Simulated Bead** uses one width and height for every printing operation in a
 file. It preserves exactly one curve and material per tool beneath the file's
 parent Empty, with no profile helper objects, size groups, or join meshes.
 All layers, features, tools, bridges and included purge/tower paths receive
@@ -20,7 +20,7 @@ beyond each endpoint. Continuous closed paths have no end caps.
 
 Each open end uses two added control points: a rounded shoulder and a zero-radius
 tip. Imported curves use Bevel Resolution 1, Resolution Preview U 2 and Render U 5
-in both profile modes. These defaults can be edited in Object Data Properties;
+in the two beveled modes. These defaults can be edited in Object Data Properties;
 they are not import options. Compared with the previous defaults (bevel 3,
 preview 1), short disconnected strokes use fewer polygons, while the higher
 preview resolution can increase polygon counts on long or closed paths.
@@ -73,7 +73,9 @@ are reported in Blender. The file parent records `bead_width`, `bead_height`,
 This is a nominal visualization. Rounded ends add some visual volume; pressure,
 shrinkage, sag and deposited-bead overlap are not simulated. Helical/nonplanar
 sections follow a Z-up curve frame, so their vertical bounds are approximate.
-**Round (legacy)** retains the original 0.2-radius circular bevel and flat caps.
+**Round** uses a 0.2-radius circular bevel and flat caps.
+**None** keeps the editable extrusion centerlines at the G-code coordinates,
+without bevel, thickness, or end caps. Paths are still grouped by tool.
 
 ## Infill and support markers
 
@@ -94,7 +96,7 @@ sampled into arc points or used to estimate bead dimensions. Arc geometry in
 these excluded sections is not validated. Mode changes, tool changes and G92
 still apply. Entering and leaving an excluded section splits paths to avoid
 connecting model geometry across it. File decoding and state parsing still run.
-These rules apply to text/BGCode, both profile modes and multi-file imports.
+These rules apply to text/BGCode, all profile modes and multi-file imports.
 
 ## Wipe and prime tower markers
 

@@ -27,7 +27,7 @@ The importer supports text G-code, Prusa binary BGCode, and XY arcs, including h
 
 | Option | Default | Description |
 | --- | --- | --- |
-| Extrusion profile | Printed bead | One flattened profile for the entire print, with rounded ends. Round (legacy) retains the original circular bevel and flat caps. |
+| Extrusion profile | Simulated Bead | Simulated Bead gives paths a flattened profile with rounded ends. Round uses a circular bevel and flat caps. None imports editable paths without thickness. |
 | Fallback filament diameter (mm) | 1.75 | Used for volume calculations when the file has no filament diameter. |
 | Fallback layer height (mm) | 0.20 | Used when a representative height is unavailable. |
 | Fallback bead width (mm) | 0.45 | Used when model extrusion cannot be identified and the file has no nominal width setting. |
@@ -46,7 +46,7 @@ commands read; exclusions reduce path storage and generated geometry.
 This depends heavily on the computer you are running on, but imports can take anywhere from just a couple seconds to several minutes depending on the size and complexity of the model that is being imported.
 
 **How do I give the imported paths thickness?**<br>
-Paths have thickness by default. Select a tool's curve object, then open Object Data Properties > Geometry. In Printed bead mode, Bevel Depth controls half the bead height and Extrude controls half the difference between width and height. These controls still affect all paths for that tool together. Rounded ends are editable curve points. Selecting the root Empty controls transforms; it does not expose curve geometry settings.
+Paths have thickness by default. Select a tool's curve object, then open Object Data Properties > Geometry. In Simulated Bead mode, Bevel Depth controls half the bead height and Extrude controls half the difference between width and height. These controls still affect all paths for that tool together. Rounded ends are editable curve points. Selecting the root Empty controls transforms; it does not expose curve geometry settings.
 
 ## Planned Features
 - Add import options for things such as skipping layers, path resolution, or defining custom GCode parameters.

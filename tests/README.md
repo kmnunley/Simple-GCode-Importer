@@ -49,7 +49,7 @@ Background tests cover drop registration, supported contexts, and popup versus
 file-browser routing. To check the actual UI, drag text and binary G-code files
 into a 3D Viewport or View Layer Outliner, confirm, and verify the resulting paths.
 
-The existing exact centerline/state suites explicitly select Round (legacy).
+The existing exact centerline/state suites explicitly select Round.
 The bead suite exercises the new default, including evaluated geometry and
 the original file-parent/tool-curve hierarchy. Purge regressions deliberately
 vary startup extrusion, width and elevation without changing the selected

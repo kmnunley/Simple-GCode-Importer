@@ -212,12 +212,13 @@ def create_paths(gcode_lines, *, exclude_wipe_tower=True, exclude_infill=False,
 def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
                   exclude_infill=False, exclude_supports=False,
                   profile='BEAD', filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
-    if profile not in ('BEAD', 'ROUND'):
+    if profile not in ('BEAD', 'ROUND', 'NONE'):
         raise ValueError('Unknown extrusion profile')
     gcode_lines = read_lines()
     if not isinstance(gcode_lines, list):
         gcode_lines = list(gcode_lines)
-    estimator = ProfileEstimator(gcode_lines, filament_diameter, layer_height, extrusion_width)
+    estimator = (ProfileEstimator(gcode_lines, filament_diameter, layer_height, extrusion_width)
+                 if profile != 'NONE' else None)
     bead_paths = {}
     # Initialize the toolhead position and extruder temperature
     toolhead_pos = (0, 0, 0)
@@ -263,8 +264,9 @@ def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=
             curve_data.resolution_u = 2
             curve_data.render_resolution_u = 5
             curve_data.bevel_resolution = 1
-            curve_data.use_fill_caps = True
-            curve_data.bevel_depth = 0.2
+            if profile == 'ROUND':
+                curve_data.use_fill_caps = True
+                curve_data.bevel_depth = 0.2
             material = bpy.data.materials.new(current_tool)
             created_data["materials"].append(material)
             curve_data.materials.append(material)
@@ -495,8 +497,9 @@ class ImportGCodeOperator(Operator, ImportHelper):
     directory: StringProperty(subtype='DIR_PATH')
 
     profile: EnumProperty(name='Extrusion profile', items=[
-        ('BEAD', 'Printed bead', 'One flattened profile for the entire print, with rounded ends'),
-        ('ROUND', 'Round (legacy)', 'Original circular bevel and flat caps')], default='BEAD')
+        ('BEAD', 'Simulated Bead', 'One flattened profile for the entire print, with rounded ends'),
+        ('ROUND', 'Round', 'Circular bevel with flat caps'),
+        ('NONE', 'None', 'Editable extrusion paths without thickness')], default='BEAD')
     filament_diameter: FloatProperty(name='Fallback filament diameter (mm)', default=1.75, min=.01)
     layer_height: FloatProperty(name='Fallback layer height (mm)', default=.2, min=.001)
     extrusion_width: FloatProperty(name='Fallback bead width (mm)', default=.45, min=.001)
