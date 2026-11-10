@@ -9,6 +9,8 @@ headers, checksums, sizes and truncated compressed/encoded streams.
 Unlike upstream's structured API, load() returns strings for our path builder.
 """
 
+from itertools import islice
+import mmap
 import re
 import struct
 import zlib
@@ -72,6 +74,27 @@ def _decompress(payload, compression, size):
     if len(result) != size:
         raise ValueError("Decompressed size does not match the block header")
     return result
+
+
+def iter_line_batches(path):
+    """Yield source lines in bounded batches for a read-only preflight scan."""
+    with open(path, 'rb') as source:
+        binary = source.read(4) == _BGCODE_MAGIC
+        if binary:
+            with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                pending = ''
+                for _, text, _ in _iter_bgcode_parts(data):
+                    lines = (pending + text).split('\n')
+                    pending = lines.pop()
+                    yield lines
+                if pending:
+                    yield [pending]
+            return
+    with open(path, encoding='utf-8-sig') as source:
+        while lines := list(islice(source, 4096)):
+            if any('\x00' in line for line in lines):
+                raise ValueError('Unrecognized binary file; expected Prusa BGCode (GCDE)')
+            yield lines
 
 
 def _iter_bgcode_parts(data, *, include_metadata=False):

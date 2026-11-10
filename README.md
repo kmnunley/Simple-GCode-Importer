@@ -13,6 +13,11 @@ To install the plugin, add it to Blender from the [Extension website](https://ex
 ## Usage
 In Blender 4.2 or newer, go to File > Import > GCode (.gcode, .bgcode), select one or more files, and click Import GCode/BGCode. You can also drag supported files into the 3D Viewport or Outliner and confirm the import.
 
+**Estimated RAM required** shows roughly how much additional RAM Blender may
+use for viewport import after a file is selected. It updates when you change
+the extrusion profile or feature filters. Actual memory use varies with the
+Blender version, scene, and graphics backend.
+
 During interactive imports, Blender’s status bar shows the current stage and
 approximate progress. Press Escape to cancel and remove the current import batch.
 After a successful import, the status bar shows the elapsed time for five seconds.

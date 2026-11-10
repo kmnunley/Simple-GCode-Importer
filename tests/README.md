@@ -37,6 +37,7 @@ python -m unittest discover -s tests -p test_bgcode_reader.py
 | `test_wipe_tower.py` | Default-on import option, PrusaSlicer/OrcaSlicer markers, excluded geometry and preserved state, text/BGCode batches, and rollback |
 | `test_file_import.py` | File root hierarchy, independent imports, parent transforms, registered operators, mixed batches, rollback, and drop-handler routing |
 | `test_import_memory.py` | Compact coordinate precision, matching raw geometry, source-line release, incremental path disposal and caller-owned data preservation |
+| `test_memory_estimate.py` | Text and BGCode preflight parity, filter-aware counts, and cancellation when the file selection changes |
 | `test_feature_exclusion.py` | Independent infill/support options, marker variants, no excluded arc sampling or geometry, retained state and surfaces, profile sizing, and text/BGCode batches |
 | `bgcode_fixtures.py` | Independent binary encoders shared by reader and import tests |
 | `fixtures/` | Small text G-code samples for material and arc imports |

@@ -11,6 +11,7 @@ from bpy.types import Operator, OperatorFileListElement, FileHandler
 
 from .gcode_lib import load, load_steps
 from .extrusion import INFILL_ROLES, SUPPORT_ROLES, ProfileEstimator, role_marker
+from .memory_estimate import Scan, estimate_mib, scan_batches
 
 
 bl_info = {
@@ -540,6 +541,66 @@ def _import_gcodes_steps(filepaths, *, interactive=False, **options):
     return sorted(assumptions)
 
 
+class _MemoryPreview:
+    """Cache a selection's counters and scan in short Blender timer callbacks."""
+
+    def __init__(self):
+        self.callback = self.tick
+        self.key = None
+        self.scan = None
+        self.job = None
+        self.error = False
+
+    def cancel(self):
+        if bpy.app.timers.is_registered(self.callback):
+            bpy.app.timers.unregister(self.callback)
+        if self.job is not None:
+            self.job.close()
+        self.key = self.scan = self.job = None
+        self.error = False
+
+    def request(self, paths):
+        try:
+            key = tuple(self.signature(path) for path in paths)
+        except OSError:
+            self.cancel()
+            return
+        if key == self.key:
+            return
+        self.cancel()
+        if not key:
+            return
+        self.key = key
+        self.scan = Scan()
+        self.job = self.count(paths)
+        bpy.app.timers.register(self.callback, first_interval=.15)
+
+    @staticmethod
+    def signature(path):
+        stat = os.stat(path)
+        return path, stat.st_size, stat.st_mtime_ns
+
+    def count(self, paths):
+        for path in paths:
+            yield from scan_batches(path, self.scan)
+
+    def tick(self):
+        try:
+            deadline = time.perf_counter() + .01
+            while time.perf_counter() < deadline:
+                next(self.job)
+        except (StopIteration, OSError, ValueError) as result:
+            self.error = not isinstance(result, StopIteration)
+            self.job.close()
+            self.job = None
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    area.tag_redraw()
+            return None
+        return .02
+
+
+_memory_preview = _MemoryPreview()
 _active_import = None
 
 
@@ -654,6 +715,39 @@ class ImportGCodeOperator(Operator, ImportHelper):
         column.label(text="PrusaSlicer and OrcaSlicer only")
         column.prop(self, 'exclude_infill')
         column.prop(self, 'exclude_supports')
+        paths = self.selected_paths(context)
+        _memory_preview.request(paths)
+        if paths:
+            preview = column.box()
+            preview.label(text='Estimated RAM required')
+            if _memory_preview.job is not None:
+                preview.label(text='Reading G-code…')
+            elif _memory_preview.error or _memory_preview.scan is None:
+                preview.label(text='Estimate unavailable')
+            else:
+                low, high = estimate_mib(_memory_preview.scan, profile=self.profile,
+                    exclude_infill=self.exclude_infill, exclude_supports=self.exclude_supports,
+                    exclude_wipe_tower=self.exclude_wipe_tower)
+                if high >= 1024:
+                    label = f'About {low / 1024:.1f}–{high / 1024:.1f} GiB'
+                elif high:
+                    label = f'About {low}–{high} MiB'
+                else:
+                    label = 'No extrusion moves found'
+                preview.label(text=label)
+
+    def selected_paths(self, context):
+        space = context.space_data
+        if space and space.type == 'FILE_BROWSER' and space.params:
+            directory = os.fsdecode(space.params.directory)
+            names = [item.name for item in (getattr(context, 'selected_files', None) or ())]
+            if not names and space.params.filename:
+                names = [space.params.filename]
+            paths = [os.path.join(directory, name) for name in names]
+        else:
+            paths = self.import_paths()
+        return tuple(path for path in paths if path.lower().endswith(('.gcode', '.bgcode'))
+                     and os.path.isfile(path))
 
     def import_paths(self):
         return ([os.path.join(self.directory, item.name) for item in self.files]
@@ -665,6 +759,7 @@ class ImportGCodeOperator(Operator, ImportHelper):
         return self.invoke_popup(context)
 
     def cancel(self, context):
+        _memory_preview.cancel()
         if _active_import is self:
             self._stop_import(context)
 
@@ -687,6 +782,7 @@ class ImportGCodeOperator(Operator, ImportHelper):
         if _active_import is not None:
             self.report({'WARNING'}, 'A G-code import is already running')
             return {'CANCELLED'}
+        _memory_preview.cancel()
         filepaths = self.import_paths()
         options = dict(exclude_wipe_tower=self.exclude_wipe_tower,
             exclude_infill=self.exclude_infill, exclude_supports=self.exclude_supports,
@@ -769,6 +865,7 @@ def register():
 def unregister():
     if _active_import is not None:
         _active_import.cancel(bpy.context)
+    _memory_preview.cancel()
     _import_status.clear()
     # Remove the operator from the File > Import menu
     bpy.types.TOPBAR_MT_file_import.remove(menu_func)
