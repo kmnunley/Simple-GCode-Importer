@@ -9,7 +9,7 @@ from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
 from bpy.types import Operator, OperatorFileListElement, FileHandler
 
 from .gcode_lib import load
-from .extrusion import ProfileEstimator
+from .extrusion import INFILL_ROLES, SUPPORT_ROLES, ProfileEstimator, role_marker
 
 
 bl_info = {
@@ -198,16 +198,19 @@ def import_transaction():
         raise
 
 
-def create_paths(gcode_lines, *, exclude_wipe_tower=True, profile='BEAD',
+def create_paths(gcode_lines, *, exclude_wipe_tower=True, exclude_infill=False,
+                 exclude_supports=False, profile='BEAD',
                  filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     """Create paths atomically, rolling back this import's data on failure."""
     with import_transaction() as created_data:
         return _create_paths(lambda: gcode_lines, created_data, exclude_wipe_tower=exclude_wipe_tower,
+                             exclude_infill=exclude_infill, exclude_supports=exclude_supports,
                              profile=profile, filament_diameter=filament_diameter,
                              layer_height=layer_height, extrusion_width=extrusion_width)
 
 
 def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=True,
+                  exclude_infill=False, exclude_supports=False,
                   profile='BEAD', filament_diameter=1.75, layer_height=.2, extrusion_width=.45):
     if profile not in ('BEAD', 'ROUND'):
         raise ValueError('Unknown extrusion profile')
@@ -233,6 +236,7 @@ def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=
     extruder_positions = {}
     tower_role = False
     tower_block = False
+    feature_excluded = False
 
     def dump_curve(points):
         nonlocal root
@@ -320,6 +324,15 @@ def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=
     # Iterate through the gcode instructions
     for line_number, line in enumerate(gcode_lines, 1):
         code, separator, comment = line.partition(";")
+        if separator and (exclude_infill or exclude_supports):
+            role = role_marker(comment)
+            if role is not None:
+                excluded = ((exclude_infill and role in INFILL_ROLES) or
+                            (exclude_supports and role in SUPPORT_ROLES))
+                if excluded != feature_excluded:
+                    dump_curve(point_data)
+                    point_data = []
+                feature_excluded = excluded
         if separator and profile == 'BEAD':
             estimator.comment(comment)
         if exclude_wipe_tower and separator and not code.strip():
@@ -368,6 +381,12 @@ def _create_paths(read_lines, created_data, name="GCode", *, exclude_wipe_tower=
                     e = coord["E"]
                 else:
                     e = e + coord["E"]
+
+            if feature_excluded:
+                # Keep XYZ, E and retraction recovery, but allocate no path or
+                # arc samples and do not feed excluded moves into bead sizing.
+                max_e = max(max_e, e)
+                continue
 
             if command in ("G2", "G3"):
                 try:
@@ -488,6 +507,18 @@ class ImportGCodeOperator(Operator, ImportHelper):
         default=True,
     )
 
+    exclude_infill: BoolProperty(
+        name='Exclude infill',
+        description='Skip marked sparse, internal solid and gap infill; keep top/bottom surfaces. '
+                    'Requires slicer TYPE or FEATURE comments',
+        default=False,
+    )
+    exclude_supports: BoolProperty(
+        name='Exclude supports',
+        description='Skip marked supports and support interfaces. Requires slicer TYPE or FEATURE comments',
+        default=False,
+    )
+
     def draw(self, context):
         column = self.layout.column(align=True)
         column.prop(self, 'profile')
@@ -497,6 +528,8 @@ class ImportGCodeOperator(Operator, ImportHelper):
             column.prop(self, 'extrusion_width')
         column.prop(self, "exclude_wipe_tower", text="Exclude wipe/prime tower")
         column.label(text="PrusaSlicer and OrcaSlicer only")
+        column.prop(self, 'exclude_infill')
+        column.prop(self, 'exclude_supports')
 
     def invoke(self, context, event):
         # A drop supplies the path already; show confirmation instead of reopening
@@ -508,7 +541,8 @@ class ImportGCodeOperator(Operator, ImportHelper):
                      if self.files else [self.filepath])
         try:
             assumptions = import_gcodes(filepaths, exclude_wipe_tower=self.exclude_wipe_tower,
-                profile=self.profile, filament_diameter=self.filament_diameter,
+                exclude_infill=self.exclude_infill,
+                exclude_supports=self.exclude_supports, profile=self.profile, filament_diameter=self.filament_diameter,
                 layer_height=self.layer_height, extrusion_width=self.extrusion_width)
             if assumptions:
                 self.report({'WARNING'}, 'Bead profile used: ' + ', '.join(assumptions))

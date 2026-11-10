@@ -75,6 +75,27 @@ shrinkage, sag and deposited-bead overlap are not simulated. Helical/nonplanar
 sections follow a Z-up curve frame, so their vertical bounds are approximate.
 **Round (legacy)** retains the original 0.2-radius circular bevel and flat caps.
 
+## Infill and support markers
+
+**Exclude infill** and **Exclude supports** are independent, default-off options.
+Both recognize case-insensitive `;TYPE:` and `;FEATURE:` comments, normalizing
+hyphens and underscores to spaces. Unknown roles are retained; filtering never
+guesses a feature from its position or shape.
+
+Infill roles are `Fill`, `Infill`, `Sparse infill`, `Internal infill`, `Solid infill`,
+`Internal solid infill`, `Gap fill` and `Gap infill`. Top solid infill, top/bottom
+surfaces, skin and bridge surfaces are retained. Support roles include `Support`,
+`Support material`, `Support material interface`, `Support interface`,
+`Support transition`, `Support (base)`, `Support (interface)`, `Support roof` and
+`Support floor`.
+
+Excluded moves update XYZ and extrusion state but are not collected as paths,
+sampled into arc points or used to estimate bead dimensions. Arc geometry in
+these excluded sections is not validated. Mode changes, tool changes and G92
+still apply. Entering and leaving an excluded section splits paths to avoid
+connecting model geometry across it. File decoding and state parsing still run.
+These rules apply to text/BGCode, both profile modes and multi-file imports.
+
 ## Wipe and prime tower markers
 
 **Exclude wipe/prime tower (PrusaSlicer and OrcaSlicer only)** is enabled by

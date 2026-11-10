@@ -32,6 +32,14 @@ The importer supports text G-code, Prusa binary BGCode, and XY arcs, including h
 | Fallback layer height (mm) | 0.20 | Used when a representative height is unavailable. |
 | Fallback bead width (mm) | 0.45 | Used when model extrusion cannot be identified and the file has no nominal width setting. |
 | Exclude wipe/prime tower (PrusaSlicer and OrcaSlicer only) | On | Excludes the tower when the slicer's feature comments identify it. Turn off to include the tower. Files without those comments import unchanged. |
+| Exclude infill | Off | Skips marked sparse, internal solid and gap infill before collecting paths or sampling arcs. Keeps top/bottom surfaces and bridge surfaces. |
+| Exclude supports | Off | Skips marked supports and support interfaces before collecting paths or sampling arcs. |
+
+Infill and support exclusion use slicer `;TYPE:` or `;FEATURE:` comments (including
+PrusaSlicer, OrcaSlicer and Cura feature names). Files without recognized markers
+are unchanged. Excluded moves still update position, tool and extrusion state so
+the remaining paths resume correctly. The file still needs to be decoded and its
+commands read; exclusions reduce path storage and generated geometry.
 
 ## FAQ
 **How long do models take to import?**<br>

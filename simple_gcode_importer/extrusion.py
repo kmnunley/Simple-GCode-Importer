@@ -13,6 +13,12 @@ MODEL_ROLES = {
     'support', 'support material', 'support material interface', 'support interface',
     'support transition', 'gap fill', 'gap infill',
 }
+# Exact slicer feature names; keep top/bottom skins and bridge surfaces.
+INFILL_ROLES = {'fill', 'infill', 'sparse infill', 'internal infill',
+                'solid infill', 'internal solid infill', 'gap fill', 'gap infill'}
+SUPPORT_ROLES = {'support', 'support material', 'support material interface',
+                 'support interface', 'support transition', 'support (base)',
+                 'support (interface)', 'support roof', 'support floor'}
 WIDTH_SETTINGS = (
     'extrusion_width', 'line_width', 'perimeter_extrusion_width',
     'perimeters extrusion width', 'outer_wall_line_width',
