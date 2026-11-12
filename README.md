@@ -63,6 +63,9 @@ Paths have thickness by default. Select a tool's curve object, then open Object 
 - Add the ability to import GCode as a point cloud
 
 ## Troubleshooting
+**Parts of a large import are missing or stretch toward the origin**  
+Very large **Simulated Bead** imports can display incorrectly in Blender’s OpenGL viewport even when all curve points are present in Edit Mode. Try switching Blender’s graphics backend to **Vulkan**, or set **Object Data Properties → Shape → Resolution Preview U** to **1** on the affected curves. Both workarounds restored the full model in testing. See [known issue #25](https://github.com/kmnunley/Simple-GCode-Importer/issues/25) for details.
+
 If you are experiencing issues with the plugin, feel free to open an issue and I'll respond when i can.
 
 ## Credits
