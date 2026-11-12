@@ -50,6 +50,10 @@ class MaterialImportTests(unittest.TestCase):
         for obj in objects:
             self.assertAlmostEqual(obj.data.bevel_depth, .2)
             self.assertTrue(obj.data.use_fill_caps)
+            self.assertEqual(obj.data.bevel_resolution, 1)
+            self.assertEqual(obj.data.resolution_u, 2)
+            self.assertEqual(obj.data.render_resolution_u, 5)
+            self.assertTrue(all(spline.resolution_u == 2 for spline in obj.data.splines))
 
     def test_no_tool_command_defaults_to_t0_and_flushes_at_eof(self):
         objects = self.paths("G1 X0 E1\nG1 X10 E1\n")

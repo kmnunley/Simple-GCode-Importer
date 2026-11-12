@@ -91,6 +91,33 @@ class FileImportTests(unittest.TestCase):
                               for obj in root.children}, {'T0', 'T1'})
         self.assertIsNot(roots[0].children[0].data, roots[1].children[0].data)
 
+    def test_no_profile_imports_unbeveled_centerlines_by_tool(self):
+        path = self.write('centerlines.bgcode', binary(
+            'M83\nG0 Z.2\nG1 X10 E1\nT1\nG1 Y5 E1\n'
+            ';TYPE:Support\nG1 Y15 E1\n', 3, 2))
+        result = bpy.ops.import_gcode.operator(
+            profile='NONE', filepath=path, exclude_supports=True)
+        self.assertEqual(result, {'FINISHED'})
+        root, = (obj for obj in bpy.context.collection.objects if obj.type == 'EMPTY')
+        curves = {obj.data.materials[0].name.split('.')[0]: obj for obj in root.children}
+        self.assertEqual(set(curves), {'T0', 'T1'})
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        for tool, endpoints in {'T0': [(0, 0, .2), (10, 0, .2)],
+                                'T1': [(10, 0, .2), (10, 5, .2)]}.items():
+            obj = curves[tool]
+            self.assertEqual(obj.data.bevel_depth, 0)
+            self.assertEqual(obj.data.extrude, 0)
+            self.assertFalse(obj.data.use_fill_caps)
+            spline, = obj.data.splines
+            self.assertEqual([tuple(round(v, 4) for v in p.co)
+                              for p in spline.bezier_points], endpoints)
+            evaluated = obj.evaluated_get(depsgraph)
+            mesh = evaluated.to_mesh()
+            try:
+                self.assertEqual(len(mesh.polygons), 0)
+            finally:
+                evaluated.to_mesh_clear()
+
     def test_repeated_imports_have_independent_roots_and_curve_settings(self):
         path = self.write('part.gcode', b'G1 X10 E1\nG0 X20\nG1 X30 E1\n')
         importer.import_gcode(path)

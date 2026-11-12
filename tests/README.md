@@ -36,6 +36,9 @@ python -m unittest discover -s tests -p test_bgcode_reader.py
 | `test_materials.py` | Per-tool curves and materials, bevel, disconnected splines, and extrusion state |
 | `test_wipe_tower.py` | Default-on import option, PrusaSlicer/OrcaSlicer markers, excluded geometry and preserved state, text/BGCode batches, and rollback |
 | `test_file_import.py` | File root hierarchy, independent imports, parent transforms, registered operators, mixed batches, rollback, and drop-handler routing |
+| `test_import_memory.py` | Compact coordinate precision, matching raw geometry, source-line release, incremental path disposal and caller-owned data preservation |
+| `test_memory_estimate.py` | Text and BGCode preflight parity, filter-aware counts, and cancellation when the file selection changes |
+| `test_feature_exclusion.py` | Independent infill/support options, marker variants, no excluded arc sampling or geometry, retained state and surfaces, profile sizing, and text/BGCode batches |
 | `bgcode_fixtures.py` | Independent binary encoders shared by reader and import tests |
 | `fixtures/` | Small text G-code samples for material and arc imports |
 
@@ -47,7 +50,7 @@ Background tests cover drop registration, supported contexts, and popup versus
 file-browser routing. To check the actual UI, drag text and binary G-code files
 into a 3D Viewport or View Layer Outliner, confirm, and verify the resulting paths.
 
-The existing exact centerline/state suites explicitly select Round (legacy).
+The existing exact centerline/state suites explicitly select Round.
 The bead suite exercises the new default, including evaluated geometry and
 the original file-parent/tool-curve hierarchy. Purge regressions deliberately
 vary startup extrusion, width and elevation without changing the selected

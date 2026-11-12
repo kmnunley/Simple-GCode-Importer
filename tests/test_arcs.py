@@ -3,10 +3,9 @@
 import importlib.util
 import sys
 import math
-import io
+import tempfile
 from pathlib import Path
 import unittest
-from unittest.mock import patch
 
 import bpy
 
@@ -233,10 +232,12 @@ class ArcImportTests(unittest.TestCase):
         importer.register()
         try:
             text = "G1 X10 E1\nG0 X20\nG3 X30 Y10 R1 E1\n"
-            with patch("builtins.open", return_value=io.BytesIO(text.encode("utf-8"))):
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "failed-import.gcode"
+                path.write_text(text, encoding="utf-8")
                 # Blender exposes ERROR reports from CANCELLED operators as RuntimeError.
                 with self.assertRaisesRegex(RuntimeError, "Line 3:"):
-                    bpy.ops.import_gcode.operator(profile='ROUND', filepath="failed-import.gcode")
+                    bpy.ops.import_gcode.operator(profile='ROUND', filepath=str(path))
             for name, original in before.items():
                 self.assertEqual(set(getattr(bpy.data, name)), original)
         finally:

@@ -113,7 +113,13 @@ class BeadProfileTests(unittest.TestCase):
             spline = obj.data.splines[0]
             self.assertEqual(spline.bezier_points[0].radius, 0)
             self.assertEqual(spline.bezier_points[-1].radius, 0)
-            self.assertTrue(all(a.radius < b.radius for a,b in zip(spline.bezier_points[:5], spline.bezier_points[1:6])))
+            self.assertEqual(len(spline.bezier_points), 6)
+            self.assertTrue(all(a.radius < b.radius for a,b in zip(spline.bezier_points[:2], spline.bezier_points[1:3])))
+            self.assertTrue(all(a.radius > b.radius for a,b in zip(spline.bezier_points[-3:-1], spline.bezier_points[-2:])))
+            self.assertEqual(obj.data.bevel_resolution, 1)
+            self.assertEqual(obj.data.resolution_u, 2)
+            self.assertEqual(obj.data.render_resolution_u, 5)
+            self.assertEqual(spline.resolution_u, 2)
             self.assertFalse(obj.data.use_fill_caps)
             self.assertTrue(all(o.type in ('EMPTY', 'CURVE') for o in bpy.context.collection.objects))
             evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
@@ -124,6 +130,31 @@ class BeadProfileTests(unittest.TestCase):
                 self.assertTrue(all(f.normal.z > .99 for f in top))
             finally:
                 evaluated.to_mesh_clear()
+
+    def test_short_bead_stroke_polygon_budget(self):
+        obj, = self.paths('M83\nG0 Z.2\nG1 X1 E1\n')
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        mesh = evaluated.to_mesh()
+        try:
+            # Before optimization this two-point stroke had 216 vertices and
+            # 198 faces. Keep the viewport representation substantially smaller.
+            self.assertLessEqual(len(mesh.vertices), 110)
+            self.assertLessEqual(len(mesh.polygons), 100)
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_render_samples_stay_inside_rounded_end_envelope(self):
+        obj, = self.paths(HEADER + ';TYPE:Perimeter\n;WIDTH:.45\nG0 Z.2\nG1 X1 E1\n')
+        # Evaluate the render sampling density in a bounded viewport test.
+        obj.data.resolution_u = obj.data.render_resolution_u
+        radius = self.root()['bead_width'] / 2
+        for x, y, z in self.vertices(obj):
+            if x < 0:
+                self.assertLessEqual(math.hypot(x, y), radius + 1e-5)
+            elif x > 1:
+                self.assertLessEqual(math.hypot(x-1, y), radius + 1e-5)
+            self.assertGreaterEqual(z, -1e-5)
+            self.assertLessEqual(z, .2 + 1e-5)
 
     def test_closed_paths_are_uncapped_and_width_hints_do_not_split(self):
         obj, = self.paths(HEADER + ';TYPE:Perimeter\n;WIDTH:.45\nG0 Z.2\nG1 X10 E1\n'
@@ -177,7 +208,7 @@ class BeadProfileTests(unittest.TestCase):
         expected_area = (1+2*MODEL_E) * math.pi*1.75**2/4 / 20
         expected_width = round(expected_area/.2 + .2*(1-math.pi/4), 2)
         self.assertEqual(self.dimensions(), (expected_width, .2))
-        self.assertGreater(obj.data.splines[0].bezier_points[5].co.x, 0)
+        self.assertGreater(obj.data.splines[0].bezier_points[2].co.x, 0)
 
     def test_layer_inference_ignores_purge_elevation_and_travel_hops(self):
         self.paths(';filament_diameter = 1.75\nG0 Z1\nG1 X200 E100\n;TYPE:Perimeter\n;WIDTH:.45\n'
@@ -193,7 +224,7 @@ class BeadProfileTests(unittest.TestCase):
         e = MODEL_E * math.pi/2
         for angle in (math.pi/8, math.pi/32):
             self.setUp()
-            with patch.object(importer, 'ARC_MAX_ANGLE', angle):
+            with patch.object(importer.gcode_motion, 'ARC_MAX_ANGLE', angle):
                 self.paths(HEADER + ';TYPE:Perimeter\nG0 X10 Z.2\n' + f'G3 X0 Y10 I-10 E{e}\n')
             self.assertEqual(self.dimensions(), (.45, .2))
 

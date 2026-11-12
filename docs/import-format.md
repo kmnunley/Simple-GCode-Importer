@@ -4,7 +4,7 @@ Detailed format support and filtering behavior for troubleshooting G-code import
 
 ## Shared printed-bead profile
 
-**Printed bead** uses one width and height for every printing operation in a
+**Simulated Bead** uses one width and height for every printing operation in a
 file. It preserves exactly one curve and material per tool beneath the file's
 parent Empty, with no profile helper objects, size groups, or join meshes.
 All layers, features, tools, bridges and included purge/tower paths receive
@@ -17,6 +17,23 @@ curve tilt places the wide axis horizontally. Open path endpoints have rounded
 tapered extensions, ending at zero-radius poles rather than flat disks.
 These extensions remain editable in the curve and extend half a bead width
 beyond each endpoint. Continuous closed paths have no end caps.
+
+Each open end uses two added control points: a rounded shoulder and a zero-radius
+tip. Imported curves use Bevel Resolution 1, Resolution Preview U 2 and Render U 5
+in the two beveled modes. These defaults can be edited in Object Data Properties;
+they are not import options. Compared with the previous defaults (bevel 3,
+preview 1), short disconnected strokes use fewer polygons, while the higher
+preview resolution can increase polygon counts on long or closed paths.
+
+### Temporary import memory
+
+Parsed bead paths are retained in packed double-precision XYZ buffers until
+construction. File imports release decoded source lines before building curves,
+and discard each path buffer after writing its spline. Construction uses packed
+float32 buffers directly rather than per-point Python Vectors and station tuples.
+Parser precision and the resulting editable geometry are preserved. These changes
+reduce temporary import allocations; they do not reduce the completed curve's
+control-point count or the size of Blender's evaluated beveled surface.
 
 ### Choosing the single profile without using startup purge lines
 
@@ -56,7 +73,32 @@ are reported in Blender. The file parent records `bead_width`, `bead_height`,
 This is a nominal visualization. Rounded ends add some visual volume; pressure,
 shrinkage, sag and deposited-bead overlap are not simulated. Helical/nonplanar
 sections follow a Z-up curve frame, so their vertical bounds are approximate.
-**Round (legacy)** retains the original 0.2-radius circular bevel and flat caps.
+**Round** uses a 0.2-radius circular bevel and flat caps.
+**None** keeps the editable extrusion centerlines at the G-code coordinates,
+without bevel, thickness, or end caps. Paths are still grouped by tool.
+
+## Infill and support markers
+
+**Exclude infill** and **Exclude supports** are independent, default-off options.
+Both recognize case-insensitive `;TYPE:` and `;FEATURE:` comments, normalizing
+hyphens and underscores to spaces. Unknown roles are retained; filtering never
+guesses a feature from its position or shape.
+
+Infill roles are `Fill`, `Infill`, `Sparse infill`, `Internal infill`, `Solid infill`,
+`Internal solid infill`, `Gap fill` and `Gap infill`. Top solid infill, top/bottom
+surfaces, skin and bridge surfaces are retained. Support roles include `Support`,
+`Support material`, `Support material interface`, `Support interface`,
+`Support transition`, `Support (base)`, `Support (interface)`, `Support roof` and
+`Support floor`.
+
+Excluded moves update XYZ and extrusion state but are not collected as paths,
+sampled into arc points or used to estimate bead dimensions. Arc geometry in
+these excluded sections is not validated. Mode changes, tool changes and G92
+still apply. Entering and leaving an excluded section splits paths to avoid
+connecting model geometry across it. File decoding and state parsing still run.
+Feature labels inside an explicitly skipped wipe tower do not change the filter
+applied to model moves after the tower.
+These rules apply to text/BGCode, all profile modes and multi-file imports.
 
 ## Wipe and prime tower markers
 
