@@ -9,8 +9,9 @@ headers, checksums, sizes and truncated compressed/encoded streams.
 Unlike upstream's structured API, load() returns strings for our path builder.
 """
 
-from itertools import islice
+import codecs
 import mmap
+import os
 import re
 import struct
 import zlib
@@ -31,29 +32,71 @@ def load(path, *, include_metadata=False):
 
 
 def load_steps(path, *, include_metadata=False):
-    """Yield BGCode decode progress, then return the same lines as load()."""
-    with open(path, "rb") as stream:
-        data = stream.read()
-    if data.startswith(_BGCODE_MAGIC):
-        parts, metadata = [], []
-        for block_type, text, offset in _iter_bgcode_parts(data, include_metadata=include_metadata):
-            if block_type == 1:
-                parts.append(text)
-            else:
-                metadata.extend('; ' + line + '\n' for line in text.splitlines())
-            yield offset / len(data)
-        text = ''.join(parts)
-        parts.clear()
-        if metadata:
-            text += ('\n' if not text.endswith('\n') else '') + ''.join(metadata)
-    else:
-        if b"\x00" in data:
-            raise ValueError("Unrecognized binary file; expected Prusa BGCode (GCDE)")
-        text = data.decode("utf-8-sig")
-    lines = text.splitlines(keepends=True)
-    if not any(line.split(";", 1)[0].strip() for line in lines):
+    """Yield bounded read/decode progress, then return preserved source lines."""
+    lines = []
+    have_commands = False
+    for batch, progress in _line_batches(path, include_metadata=include_metadata):
+        lines.extend(batch)
+        if not have_commands:
+            have_commands = any(line.split(';', 1)[0].strip() for line in batch)
+        yield progress
+    if not have_commands:
         raise ValueError("No G-code commands found")
     return lines
+
+
+class _LineSplitter:
+    """Incremental str.splitlines(keepends=True), including split CRLF pairs."""
+    def __init__(self):
+        self.pending = ''
+
+    def feed(self, text, *, final=False):
+        lines = (self.pending + text).splitlines(keepends=True)
+        self.pending = ''
+        if lines and not final:
+            tail = lines[-1]
+            if tail.endswith('\r') or not tail.endswith(
+                    ('\n', '\v', '\f', '\r', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029')):
+                self.pending = lines.pop()
+        return lines
+
+
+def _line_batches(path, *, include_metadata=False):
+    splitter = _LineSplitter()
+    with open(path, 'rb') as source:
+        size = os.fstat(source.fileno()).st_size
+        binary = source.read(4) == _BGCODE_MAGIC
+        source.seek(0)
+        if binary:
+            metadata = []
+            last_character = ''
+            with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                for block_type, text, offset in _iter_bgcode_parts(
+                        data, include_metadata=include_metadata):
+                    if block_type == 1:
+                        if text:
+                            last_character = text[-1]
+                        batch = splitter.feed(text)
+                    else:
+                        metadata.extend('; ' + line + '\n' for line in text.splitlines())
+                        batch = []
+                    yield batch, offset / size
+            if metadata:
+                # Preserve load's historic metadata separator, including CRLF
+                # when the original source ends in a bare CR.
+                yield splitter.feed('\n' if last_character != '\n' else ''), 1.0
+                for start in range(0, len(metadata), 4096):
+                    yield splitter.feed(''.join(metadata[start:start + 4096])), 1.0
+        else:
+            decoder = codecs.getincrementaldecoder('utf-8-sig')()
+            while chunk := source.read(256 * 1024):
+                if b'\x00' in chunk:
+                    raise ValueError('Unrecognized binary file; expected Prusa BGCode (GCDE)')
+                yield splitter.feed(decoder.decode(chunk)), source.tell() / size
+            yield splitter.feed(decoder.decode(b'', final=True)), 1.0
+        tail = splitter.feed('', final=True)
+        if tail:
+            yield tail, 1.0
 
 
 def _decompress(payload, compression, size):
@@ -77,24 +120,9 @@ def _decompress(payload, compression, size):
 
 
 def iter_line_batches(path):
-    """Yield source lines in bounded batches for a read-only preflight scan."""
-    with open(path, 'rb') as source:
-        binary = source.read(4) == _BGCODE_MAGIC
-        if binary:
-            with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                pending = ''
-                for _, text, _ in _iter_bgcode_parts(data):
-                    lines = (pending + text).split('\n')
-                    pending = lines.pop()
-                    yield lines
-                if pending:
-                    yield [pending]
-            return
-    with open(path, encoding='utf-8-sig') as source:
-        while lines := list(islice(source, 4096)):
-            if any('\x00' in line for line in lines):
-                raise ValueError('Unrecognized binary file; expected Prusa BGCode (GCDE)')
-            yield lines
+    """Yield source lines with the same line boundaries as import."""
+    for lines, _ in _line_batches(path):
+        yield lines
 
 
 def _iter_bgcode_parts(data, *, include_metadata=False):

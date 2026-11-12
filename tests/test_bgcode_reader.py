@@ -60,6 +60,37 @@ class ReaderTests(unittest.TestCase):
         data += block(b'G1 X', checksum=0) + block(b'10 E1\n', checksum=0)
         self.assertEqual(self.load(data), ['G1 X10 E1\n'])
 
+    def test_preflight_matches_bgcode_line_boundaries_across_blocks(self):
+        chunks = (b'M83\rG1 X', b'1 E1\r', b'\nG1 X2 E1\n', b'G1 X3 E1')
+        data = b'GCDE' + struct.pack('<IH', 1, 1) + b''.join(
+            block(chunk, compression=1) for chunk in chunks)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'sample.bgcode'
+            path.write_bytes(data)
+            imported = reader.load(path)
+            scanned = [line for batch in reader.iter_line_batches(path) for line in batch]
+        expected = b''.join(chunks).decode().splitlines(keepends=True)
+        self.assertEqual(imported, expected)
+        self.assertEqual([line.rstrip('\r\n') for line in scanned],
+                         [line.rstrip('\r\n') for line in expected])
+
+    def test_large_text_reader_yields_and_preserves_line_endings(self):
+        text = ('; µ\r\nM83\rG1 X1 E1\n' * 150_000) + 'G1 X2 E1'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'sample.gcode'
+            path.write_bytes(b'\xef\xbb\xbf' + text.encode())
+            progress = []
+            steps = reader.load_steps(path)
+            try:
+                while True:
+                    progress.append(next(steps))
+            except StopIteration as done:
+                decoded = done.value
+        self.assertGreater(len(progress), 1)
+        self.assertTrue(any(0 < fraction < 1 for fraction in progress))
+        self.assertEqual(sorted(progress), progress)
+        self.assertEqual(decoded, text.splitlines(keepends=True))
+
     def test_empty_comment_only_and_unrecognized_binary_fail(self):
         for data in (b'', b'; just comments\n\n', b'OTHER\x00binary'):
             with self.subTest(data=data), self.assertRaises(ValueError):
