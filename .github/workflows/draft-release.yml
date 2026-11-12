@@ -1,0 +1,77 @@
+name: Draft extension release
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Artifact ID from the Build versioned extension run summary
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: draft-extension-release
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the selected artifact and commit
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+        run: |
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo 'Enter a numeric artifact ID.' >&2; exit 1; }
+          artifact=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID")
+          run_id=$(jq -er '.workflow_run.id' <<< "$artifact")
+          name=$(jq -er 'select(.expired == false) | .name' <<< "$artifact")
+          [[ "$name" =~ ^extension-([0-9]+\.[0-9]+\.[0-9]+)-([0-9a-f]{40})-[0-9]+$ ]]
+          version="${BASH_REMATCH[1]}"
+          commit="${BASH_REMATCH[2]}"
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-extension.yml" --jq '.id')
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" | jq -e --argjson workflow_id "$workflow_id" '
+            .workflow_id == $workflow_id and
+            .head_branch == "main" and .status == "completed" and
+            (.event == "push" or .event == "workflow_dispatch") and
+            .head_repository.full_name == env.GITHUB_REPOSITORY
+          '
+          git rev-list --first-parent HEAD | grep -Fx "$commit"
+          [[ "$(python3 scripts/release_build.py version "$commit")" == "$version" ]]
+          printf 'run_id=%s\nversion=%s\ncommit=%s\n' "$run_id" "$version" "$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          run-id: ${{ steps.candidate.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/package
+      - name: Verify the ZIP and create a GitHub draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          COMMIT: ${{ steps.candidate.outputs.commit }}
+        run: |
+          tag="v$VERSION"
+          package="simple_gcode_importer-$VERSION.zip"
+          cd "$RUNNER_TEMP/package"
+          actual=$(sha256sum "$package")
+          [[ "$actual" == "$(cat "$package.sha256")" ]]
+          if git -C "$GITHUB_WORKSPACE" show-ref --verify --quiet "refs/tags/$tag" || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A tag or release already exists for $tag. Review it on GitHub." >&2
+            exit 1
+          fi
+          gh release create "$tag" "$package" "$package.sha256" \
+            --repo "$GITHUB_REPOSITORY" --draft --target "$COMMIT" --title "$tag" --generate-notes
