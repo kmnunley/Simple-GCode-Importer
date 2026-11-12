@@ -41,6 +41,18 @@ def role_marker(comment):
     return None
 
 
+def wipe_tower_state(comment, role, block):
+    """Update tower state from a standalone G-code comment."""
+    marker = comment.strip().casefold()
+    if marker.startswith(('type:', 'feature:')):
+        role = marker.split(':', 1)[1].strip() in ('wipe tower', 'prime tower')
+    elif marker == 'wipe_tower_start':
+        block = True
+    elif marker == 'wipe_tower_end':
+        role = block = False
+    return role, block
+
+
 def layer_marker(comment):
     marker = comment.strip().casefold()
     if marker in ('layer_change', 'change_layer'):
@@ -105,7 +117,7 @@ class ProfileEstimator:
         self.samples = defaultdict(float)
         self.sample_assumptions = defaultdict(set)
 
-    def comment(self, comment):
+    def comment(self, comment, *, feature_excluded=False):
         marker = comment.strip().casefold()
         # Excluded sections have their own annotations. Keep the surrounding
         # model's hints and feature/layer context intact until all blocks end.
@@ -117,6 +129,10 @@ class ProfileEstimator:
                 self.excluded_blocks.discard(block)
                 return
         if self.excluded_blocks:
+            return
+        # Filtered features must not replace the retained model's role or
+        # local sizing hints. Layer boundaries still reset those hints.
+        if feature_excluded and not (layer_marker(marker) or marker.startswith('layer:')):
             return
         role = role_marker(comment)
         if role is not None:

@@ -10,7 +10,8 @@ from bpy_extras.io_utils import ImportHelper, poll_file_object_drop
 from bpy.types import Operator, OperatorFileListElement, FileHandler
 
 from .gcode_lib import load, load_steps
-from .extrusion import INFILL_ROLES, SUPPORT_ROLES, ProfileEstimator, role_marker
+from .gcode_motion import arc_points, get_params, move_position
+from .extrusion import INFILL_ROLES, SUPPORT_ROLES, ProfileEstimator, role_marker, wipe_tower_state
 from .memory_estimate import Scan, estimate_mib, scan_batches
 
 
@@ -25,69 +26,6 @@ bl_info = {
     "doc_url": "https://github.com/kmnunley/Blender-GCode-Importer",
     "category": "Import-Export",
 }
-
-# Maximum angle between samples; a full circle has at least 32 segments.
-ARC_MAX_ANGLE = math.pi / 16
-ARC_TOLERANCE = 1e-7
-# Rounding XY endpoints and I/J offsets to 0.001 mm can make the two radii
-# differ by up to 2 * sqrt(2) * 0.001 mm. Allow that quantization error.
-ARC_RADIUS_ABS_TOLERANCE = 0.003
-
-
-def arc_points(start, end, coord, clockwise, *, with_length=False):
-    """Sample an XY arc, with relative I/J centers and linear Z interpolation."""
-    if "K" in coord:
-        raise ValueError("K arc offsets are unsupported; use XY arcs with I/J or R")
-    if "R" in coord:
-        if "I" in coord or "J" in coord:
-            raise ValueError("An arc must use either R or I/J, not both")
-        radius = abs(coord["R"])
-        dx, dy = end[0] - start[0], end[1] - start[1]
-        chord = math.hypot(dx, dy)
-        if radius <= ARC_TOLERANCE or chord <= ARC_TOLERANCE:
-            raise ValueError("R arcs need a nonzero radius and distinct XY endpoints")
-        if chord > 2 * radius + ARC_TOLERANCE:
-            raise ValueError("Arc radius is smaller than half the endpoint distance")
-        height = math.sqrt(max(0, radius * radius - chord * chord / 4))
-        side = -1 if clockwise else 1
-        if coord["R"] < 0:
-            side = -side
-        cx = (start[0] + end[0]) / 2 - side * height * dy / chord
-        cy = (start[1] + end[1]) / 2 + side * height * dx / chord
-    else:
-        if "I" not in coord and "J" not in coord:
-            raise ValueError("An arc requires I/J center offsets or an R radius")
-        cx = start[0] + coord.get("I", 0)
-        cy = start[1] + coord.get("J", 0)
-        radius = math.hypot(start[0] - cx, start[1] - cy)
-        if radius <= ARC_TOLERANCE:
-            raise ValueError("Arc center must differ from its start point")
-        end_radius = math.hypot(end[0] - cx, end[1] - cy)
-        if not math.isclose(radius, end_radius, rel_tol=1e-4,
-                            abs_tol=ARC_RADIUS_ABS_TOLERANCE):
-            raise ValueError("Arc endpoints have different distances from the I/J center")
-
-    angle = math.atan2(start[1] - cy, start[0] - cx)
-    end_angle = math.atan2(end[1] - cy, end[0] - cx)
-    sweep = (end_angle - angle) % math.tau
-    if clockwise:
-        sweep -= math.tau
-    elif sweep == 0:
-        sweep = math.tau
-    segments = max(2, math.ceil(abs(sweep) / ARC_MAX_ANGLE))
-    points = []
-    for step in range(1, segments + 1):
-        fraction = step / segments
-        theta = angle + sweep * fraction
-        points.append((cx + radius * math.cos(theta),
-                       cy + radius * math.sin(theta),
-                       start[2] + (end[2] - start[2]) * fraction))
-    # Keep adjacent moves joined exactly, even after trig/rounding errors.
-    points[-1] = end
-    if with_length:
-        return points, math.hypot(radius * abs(sweep), end[2] - start[2])
-    return points
-
 
 def _finish_steps(steps):
     while True:
@@ -304,16 +242,6 @@ def _create_paths_steps(gcode_lines, created_data, name="GCode", *, exclude_wipe
         for attribute in ('co', 'handle_left', 'handle_right'):
             curve_spline.bezier_points.foreach_set(attribute, coords)
 
-    def get_params(params):
-        coord = {}
-        for param in params:
-            if param[0] in "XYZEIJKR":
-                value = float(param[1:])
-                if not math.isfinite(value):
-                    raise ValueError("G-code coordinates must be finite")
-                coord[param[0]] = value
-        return coord
-
     def record_move(start, end, start_e, end_e, length=None):
         nonlocal point_data, max_e
         if exclude_wipe_tower and (tower_role or tower_block):
@@ -350,7 +278,9 @@ def _create_paths_steps(gcode_lines, created_data, name="GCode", *, exclude_wipe
             span = .17 if profile == 'BEAD' else .42
             yield .56 + span * (line_number - 1) / len(gcode_lines), 'Parsing G-code'
         code, separator, comment = line.partition(";")
-        if separator and (exclude_infill or exclude_supports):
+        # Feature labels inside a skipped tower describe that block only.
+        # Keep the surrounding feature active when model extrusion resumes.
+        if separator and not tower_block and (exclude_infill or exclude_supports):
             role = role_marker(comment)
             if role is not None:
                 excluded = ((exclude_infill and role in INFILL_ROLES) or
@@ -360,17 +290,10 @@ def _create_paths_steps(gcode_lines, created_data, name="GCode", *, exclude_wipe
                     point_data = []
                 feature_excluded = excluded
         if separator and profile == 'BEAD':
-            estimator.comment(comment)
+            estimator.comment(comment, feature_excluded=feature_excluded)
         if exclude_wipe_tower and separator and not code.strip():
-            marker = comment.strip().casefold()
             was_tower = tower_role or tower_block
-            if marker.startswith(("type:", "feature:")):
-                tower_role = marker.split(":", 1)[1].strip() in ("wipe tower", "prime tower")
-            elif marker == "wipe_tower_start":
-                tower_block = True
-            elif marker == "wipe_tower_end":
-                tower_block = False
-                tower_role = False
+            tower_role, tower_block = wipe_tower_state(comment, tower_role, tower_block)
             if was_tower != (tower_role or tower_block):
                 # Finish model geometry before entering the tower and never retain
                 # a boundary point across excluded sections.
@@ -391,16 +314,7 @@ def _create_paths_steps(gcode_lines, created_data, name="GCode", *, exclude_wipe
             start_pos = toolhead_pos
             start_e = e
 
-            if absolute_coord:
-                toolhead_pos = (
-                    coord.get("X", toolhead_pos[0]),
-                    coord.get("Y", toolhead_pos[1]),
-                    coord.get("Z", toolhead_pos[2]),
-                )
-            else:
-
-                toolhead_pos = tuple(toolhead_pos[i] + coord.get(axis, 0)
-                                     for i, axis in enumerate("XYZ"))
+            toolhead_pos = move_position(start_pos, coord, absolute_coord)
 
             if "E" in coord:
                 if absolute_extrude:
@@ -467,11 +381,7 @@ def _create_paths_steps(gcode_lines, created_data, name="GCode", *, exclude_wipe
         elif command == "G92":
             coord = get_params(params)
 
-            toolhead_pos = (
-                coord.get("X", toolhead_pos[0]),
-                coord.get("Y", toolhead_pos[1]),
-                coord.get("Z", toolhead_pos[2]),
-            )
+            toolhead_pos = move_position(toolhead_pos, coord, True)
 
             if "E" in coord:
                 e = coord["E"]

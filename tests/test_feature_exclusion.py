@@ -82,6 +82,29 @@ class FeatureExclusionTests(unittest.TestCase):
                 ';TYPE:Perimeter\nG1 X10 E1\n', exclude_supports=True)
         self.assertEqual(self.coordinates(obj), [[(0, 10, 0), (10, 10, 0)]])
 
+    def test_skipped_tower_keeps_the_surrounding_feature(self):
+        cases = (
+            ('Perimeter', 'Internal infill', 'exclude_infill',
+             [[(0, 0, 0), (10, 0, 0)], [(20, 0, 0), (30, 0, 0)], [(40, 0, 0), (50, 0, 0)]]),
+            ('Support', 'Perimeter', 'exclude_supports', [[(40, 0, 0), (50, 0, 0)]]),
+        )
+        for outer, inner, option, expected in cases:
+            with self.subTest(outer=outer, inner=inner):
+                self.setUp()
+                obj, = self.paths(
+                    f'M82\n;TYPE:{outer}\nG1 X10 E10\n;WIPE_TOWER_START\n'
+                    f';TYPE:{inner}\nG1 X20 E20\n;WIPE_TOWER_END\n'
+                    'G1 X30 E30\nG0 X40\n;TYPE:Perimeter\nG1 X50 E50\n',
+                    **{option: True})
+                self.assertEqual(self.coordinates(obj), expected)
+
+    def test_feature_labels_still_apply_when_tower_exclusion_is_off(self):
+        obj, = self.paths(
+            'M83\n;TYPE:Perimeter\nG1 X10 E1\n;WIPE_TOWER_START\n'
+            ';TYPE:Internal infill\nG1 X20 E1\n;WIPE_TOWER_END\nG1 X30 E1\n',
+            exclude_infill=True, exclude_wipe_tower=False)
+        self.assertEqual(self.coordinates(obj), [[(0, 0, 0), (10, 0, 0)]])
+
     def test_excluded_sections_do_not_enter_bead_paths_or_profile_estimates(self):
         original = importer._build_bead_paths_steps
         captured = {}
@@ -98,6 +121,35 @@ class FeatureExclusionTests(unittest.TestCase):
         self.assertEqual(captured['paths'], {'T0': [[(0, 0, .2), (10, 0, .2)]]})
         self.assertEqual(captured['profile'].width, .45)
 
+    def test_excluded_sizing_hints_do_not_leak_into_retained_paths(self):
+        cases = (
+            ('Support material', 'exclude_supports', '', .2),
+            ('Internal infill', 'exclude_infill', '', .2),
+            ('Support material', 'exclude_supports', ';TYPE:Perimeter\n;HEIGHT:.3\n', .3),
+        )
+        for role, option, prefix, expected_height in cases:
+            with self.subTest(role=role, prefix=prefix):
+                self.setUp()
+                text = (
+                    '; layer_height = .2\nM83\n;LAYER:0\n' + prefix +
+                    f';TYPE:{role}\n;HEIGHT:.6\n;WIDTH:2\nG1 X5 E1\n'
+                    ';TYPE:Perimeter\n;WIDTH:.8\nG1 X20 E1\n'
+                )
+                importer.create_paths(text.splitlines(), **{option: True})
+                root, = (obj for obj in bpy.context.collection.objects if obj.type == 'EMPTY')
+                self.assertAlmostEqual(root['bead_height'], expected_height)
+                self.assertAlmostEqual(root['bead_width'], .8)
+
+    def test_layer_boundary_inside_excluded_feature_clears_old_height_hint(self):
+        text = (
+            '; layer_height = .2\nM83\n;LAYER:0\n;TYPE:Perimeter\n;HEIGHT:.3\n'
+            ';TYPE:Support material\n;LAYER:1\n;HEIGHT:.6\nG1 X5 E1\n'
+            ';TYPE:Perimeter\n;WIDTH:.8\nG1 X20 E1\n'
+        )
+        importer.create_paths(text.splitlines(), exclude_supports=True)
+        root, = (obj for obj in bpy.context.collection.objects if obj.type == 'EMPTY')
+        self.assertAlmostEqual(root['bead_height'], .2)
+
     def test_operator_text_binary_batch_and_tower_combination(self):
         importer.register()
         self.addCleanup(importer.unregister)
@@ -105,7 +157,8 @@ class FeatureExclusionTests(unittest.TestCase):
         self.assertFalse(props['exclude_infill'].default)
         self.assertFalse(props['exclude_supports'].default)
         text = ('M83\n;TYPE:Sparse infill\nG1 X10 E1\n;FEATURE:Support interface\nG1 X20 E1\n'
-                ';WIPE_TOWER_START\n;TYPE:Perimeter\nG1 X30 E1\n;WIPE_TOWER_END\nG1 X40 E1\n')
+                ';WIPE_TOWER_START\n;TYPE:Perimeter\nG1 X30 E1\n;WIPE_TOWER_END\n'
+                ';TYPE:Perimeter\nG1 X40 E1\n')
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder)/'one.gcode').write_text(text)
             (Path(folder)/'two.bgcode').write_bytes(binary(text, 3, 2))

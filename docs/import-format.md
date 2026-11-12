@@ -96,6 +96,8 @@ sampled into arc points or used to estimate bead dimensions. Arc geometry in
 these excluded sections is not validated. Mode changes, tool changes and G92
 still apply. Entering and leaving an excluded section splits paths to avoid
 connecting model geometry across it. File decoding and state parsing still run.
+Feature labels inside an explicitly skipped wipe tower do not change the filter
+applied to model moves after the tower.
 These rules apply to text/BGCode, all profile modes and multi-file imports.
 
 ## Wipe and prime tower markers

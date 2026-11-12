@@ -224,7 +224,7 @@ class BeadProfileTests(unittest.TestCase):
         e = MODEL_E * math.pi/2
         for angle in (math.pi/8, math.pi/32):
             self.setUp()
-            with patch.object(importer, 'ARC_MAX_ANGLE', angle):
+            with patch.object(importer.gcode_motion, 'ARC_MAX_ANGLE', angle):
                 self.paths(HEADER + ';TYPE:Perimeter\nG0 X10 Z.2\n' + f'G3 X0 Y10 I-10 E{e}\n')
             self.assertEqual(self.dimensions(), (.45, .2))
 

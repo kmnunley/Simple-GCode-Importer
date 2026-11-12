@@ -19,6 +19,34 @@ from estimate_test_importer.memory_estimate import Scan, estimate_mib, scan_batc
 
 
 class MemoryEstimateTests(unittest.TestCase):
+    def scan_text(self, text):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'model.gcode'
+            path.write_text(text)
+            scan = Scan()
+            for _ in scan_batches(path, scan):
+                pass
+            return scan
+
+    def test_counts_full_circle_and_relative_quarter_arc_samples(self):
+        scan = self.scan_text(
+            'M83\nG92 X10 Y0\nG91\nG3 I-10 E1\nG3 X-10 Y10 I-10 E1\n')
+        # 32 points for the circle, eight for the quarter arc, plus one run.
+        self.assertEqual(scan.points(), 45)
+
+    def test_counts_trailing_decimals_and_ignores_nonmatching_tower_markers(self):
+        scan = self.scan_text(
+            'M83\nG1 X1 E1. ;TYPE:Wipe tower\n;TYPE:Wipe_tower\nG1 X2 E1.\n')
+        self.assertEqual(scan.points(), 7)
+        self.assertEqual(scan.points(exclude_wipe_tower=False), 7)
+
+    def test_feature_state_after_tower_depends_on_tower_exclusion(self):
+        scan = self.scan_text(
+            'M83\n;TYPE:Perimeter\nG1 X10 E1\n;WIPE_TOWER_START\n'
+            ';TYPE:Internal infill\nG1 X20 E1\n;WIPE_TOWER_END\nG1 X30 E1\n')
+        self.assertEqual(scan.points(exclude_infill=True), 12)
+        self.assertEqual(scan.points(exclude_infill=True, exclude_wipe_tower=False), 6)
+
     def test_file_picker_draw_can_run_before_selected_files_exists(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'model.bgcode'
@@ -56,11 +84,21 @@ class MemoryEstimateTests(unittest.TestCase):
 
     def test_unbeveled_paths_estimate_less_ram_than_either_bevel(self):
         scan = Scan(lines=60000)
-        scan.counts[0] = [40000, 2000, 1000]
+        scan.without_tower[0] = [50000, 1000]
         low, high = estimate_mib(scan, profile='NONE')
         self.assertGreater(low, 0)
         for profile in ('BEAD', 'ROUND'):
             self.assertLess(high, estimate_mib(scan, profile=profile)[0])
+
+    def test_fully_filtered_source_still_requires_ram(self):
+        scan = Scan(lines=50_000_000)
+        scan.without_tower[1] = [100, 1]
+        self.assertEqual(scan.points(exclude_infill=True), 0)
+        for profile in ('BEAD', 'ROUND', 'NONE'):
+            with self.subTest(profile=profile):
+                low, high = estimate_mib(scan, profile=profile, exclude_infill=True)
+                self.assertGreater(low, 0)
+                self.assertGreater(high, low)
 
     def test_replacing_pending_selection_closes_the_previous_scan(self):
         with tempfile.TemporaryDirectory() as directory:
