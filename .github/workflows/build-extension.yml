@@ -1,0 +1,101 @@
+name: Build versioned extension
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full SHA of a main commit to rebuild (defaults to the tip)
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      commits: ${{ steps.commits.outputs.json }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: commits
+        env:
+          BEFORE: ${{ github.event.before }}
+          REQUESTED_COMMIT: ${{ inputs.commit }}
+        run: |
+          git rev-list --first-parent "$GITHUB_SHA" > main-history
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            commit="${REQUESTED_COMMIT:-$GITHUB_SHA}"
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]] && grep -Fxq "$commit" main-history || {
+              echo 'Select a full SHA from the first-parent history of main.' >&2
+              exit 1
+            }
+            printf '%s\n' "$commit" > build-commits
+          else
+            grep -Fxq "$BEFORE" main-history || {
+              echo 'The push must advance the first-parent history of main.' >&2
+              exit 1
+            }
+            git rev-list --first-parent --reverse "$BEFORE..$GITHUB_SHA" > build-commits
+          fi
+          echo "json=$(jq -Rsc 'split("\n") | map(select(length > 0))' build-commits)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJSON(needs.plan.outputs.commits) }}
+    name: Build ${{ matrix.commit }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: version
+        env:
+          COMMIT: ${{ matrix.commit }}
+        run: |
+          version=$(python3 scripts/release_build.py version "$COMMIT")
+          echo "number=$version" >> "$GITHUB_OUTPUT"
+          git worktree add --detach "$RUNNER_TEMP/source" "$COMMIT"
+      - name: Set up Blender 4.2.0
+        run: |
+          archive=blender-4.2.0-linux-x64.tar.xz
+          base=https://download.blender.org/release/Blender4.2
+          cd "$RUNNER_TEMP"
+          curl -fsSLO --retry 3 "$base/$archive"
+          curl -fsSLO --retry 3 "$base/blender-4.2.0.sha256"
+          awk -v archive="$archive" '$2 == archive || $2 == "*" archive { print }' blender-4.2.0.sha256 \
+            | sha256sum --check --strict
+          tar -xf "$archive"
+          echo "$RUNNER_TEMP/${archive%.tar.xz}" >> "$GITHUB_PATH"
+      - name: Run Blender tests
+        run: blender --background --factory-startup --python-exit-code 1 --python "$RUNNER_TEMP/source/tests/run_blender.py"
+      - name: Build and validate the versioned ZIP
+        run: python3 scripts/release_build.py build "$RUNNER_TEMP/source" "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@v7
+        id: artifact
+        with:
+          name: extension-${{ steps.version.outputs.number }}-${{ matrix.commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package/
+          if-no-files-found: error
+      - name: Record the release candidate
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+          VERSION: ${{ steps.version.outputs.number }}
+          COMMIT: ${{ matrix.commit }}
+        run: |
+          printf '[Version %s](%s) from `%s`\n\nArtifact ID `%s`\n' \
+            "$VERSION" "$ARTIFACT_URL" "$COMMIT" "$ARTIFACT_ID" >> "$GITHUB_STEP_SUMMARY"
